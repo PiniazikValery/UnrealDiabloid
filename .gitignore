@@ -1,0 +1,13 @@
+# Unreal Engine specific
+*.log
+Saved/
+DerivedDataCache/
+Intermediate/
+Binaries/
+
+# Ignore Mac OS system files
+.DS_Store
+
+# Ignore Windows system files
+Thumbs.db
+*.tmp
