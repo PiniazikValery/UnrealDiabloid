@@ -11,3 +11,7 @@ Binaries/
 # Ignore Windows system files
 Thumbs.db
 *.tmp
+
+# Visual Studio files
+.vs/
+*.ipch
