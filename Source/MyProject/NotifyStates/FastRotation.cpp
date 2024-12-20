@@ -8,7 +8,7 @@ void UFastRotation::NotifyBegin(USkeletalMeshComponent* MeshComp, UAnimSequenceB
 	AMyProjectCharacter* Character = Cast<AMyProjectCharacter>(MeshComp->GetOwner());
 	if (Character)
 	{
-		Character->GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f);
+		//Character->GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f);
 	}
 }
 
@@ -17,7 +17,7 @@ void UFastRotation::NotifyTick(USkeletalMeshComponent* MeshComp, UAnimSequenceBa
 	AMyProjectCharacter* Character = Cast<AMyProjectCharacter>(MeshComp->GetOwner());
 	if (Character)
 	{
-		Character->GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f);
+		//Character->GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f);
 	}
 }
 
@@ -26,6 +26,6 @@ void UFastRotation::NotifyEnd(USkeletalMeshComponent* MeshComp, UAnimSequenceBas
 	AMyProjectCharacter* Character = Cast<AMyProjectCharacter>(MeshComp->GetOwner());
 	if (Character)
 	{
-		Character->GetCharacterMovement()->RotationRate = FRotator(0.0f, 400.0f, 0.0f);
+		//Character->GetCharacterMovement()->RotationRate = FRotator(0.0f, 400.0f, 0.0f);
 	}
 }

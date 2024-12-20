@@ -67,9 +67,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	bool IsDodging = false;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
+	bool IsAttacking = false;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	bool PreviusIsDodging = false;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	bool IsWalking = false;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
+	bool IsWithoutRootStart = false;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float LookRotation = 0.f;
 

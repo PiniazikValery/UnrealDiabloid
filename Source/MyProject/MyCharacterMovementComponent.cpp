@@ -5,8 +5,9 @@
 
 UMyCharacterMovementComponent::UMyCharacterMovementComponent(const FObjectInitializer& ObjectInitializer): Super(ObjectInitializer)
 {
+	bOrientRotationToMovement = false;
 	bUseAccelerationForPaths = true;
-	/*bUseRVOAvoidance = true;
-	AvoidanceConsiderationRadius = 150.0f;
-	AvoidanceWeight = 0.2f;*/
+	bUseControllerDesiredRotation = true;
+	BrakingDecelerationWalking = 512.0f;
+	RotationRate = FRotator(0.0f, 0.0f, 0.0f);
 }

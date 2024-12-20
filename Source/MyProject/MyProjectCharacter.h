@@ -14,6 +14,7 @@
 #include "Logging/LogMacros.h"
 #include "./Projectiles/MageProjectile.h"
 #include "./MyCharacterMovementComponent.h"
+#include "./Character/CharacterInput.h"
 #include "AIController.h"
 #include "MyProjectCharacter.generated.h"
 
@@ -22,8 +23,6 @@ class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
 struct FInputActionValue;
-
-// DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
 UCLASS(config = Game)
 class AMyProjectCharacter : public ACharacter
@@ -48,15 +47,15 @@ class AMyProjectCharacter : public ACharacter
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* RollAction;
 
-	/** Move Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
-	UInputAction* MoveAction;
-
 	/** Look Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* LookAction;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UAnimMontage* DodgeMontage;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UAnimMontage* StartFMontage;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UAnimMontage* StartRMontage;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UAnimMontage* FirstAttackMontage;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
@@ -67,39 +66,33 @@ class AMyProjectCharacter : public ACharacter
 	UArrowComponent* ProjectileSpawnPoint;
 	UPROPERTY(EditDefaultsOnly, Category = "Projectile")
 	TSubclassOf<class AMageProjectile> ProjectileClass;
-	/*UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
-	UPoseableMeshComponent* PoseableMesh*/
 
 public:
 	AMyProjectCharacter(const FObjectInitializer& ObjectInitializer);
-	void InitializeCharacter(bool _isAI, UClass* _AIControllerClass);
+	void PossessAIController(UClass* _AIControllerClass);
 	bool GetIsPlayerTryingToMove();
 	void SetIsPlayerTryingToMove(bool value);
 	void SetAllowPhysicsRotationDuringAnimRootMotion(bool value);
 	void SetOrientRotationToMovement(bool value);
 	void SetRotationRate(FRotator rotation);
 	void SmoothlyRotate(float degrees, float speed);
+	void SwitchToWalking();
+	void SwitchToRunning();
+	void SetMovementVector(FVector2D _MovementVector);
 
 protected:
-	/** Called for movement input */
-	void Move(const FInputActionValue& Value);
-	void OnMoving();
-	void OnIdle();
-
 	void StartDodge();
 	void FinishDodge(UAnimMontage* Montage, bool bInterrupted);
 
 	void StartAttack();
 	void FinishAttack(UAnimMontage* Montage, bool bInterrupted);
 
-	void SwitchToWalking();
-	void SwitchToRunning();
-
 	void DoNothing(UAnimMontage* Montage, bool bInterrupted);
 
 	// APawn interface
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	virtual void Tick(float DeltaTime) override;
+	virtual void BeginPlay() override;
 
 	// Gestures
 	void OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location);
@@ -112,11 +105,15 @@ public:
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 	UFUNCTION(BlueprintCallable, Category = "Movement")
+	bool GetWithoutRootStart();
+	UFUNCTION(BlueprintCallable, Category = "Movement")
 	bool GetIsWalking();
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	float GetInputDirection() const;
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	bool GetIsDodging() const;
+	UFUNCTION(BlueprintCallable, Category = "Movement")
+	bool GetIsAttacking() const;
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	void SetIsInRollAnimation(bool value);
 	UFUNCTION(BlueprintCallable, Category = "Movement")
@@ -125,10 +122,13 @@ public:
 	void SetIsAttackEnding(bool value);
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	void SetIsSecondAttackWindowOpen(bool value);
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UCharacterInput* InputHandler;
 	void FireProjectile();
 
 private:
-	bool				isAI = false;
+	/*float				PreviousSpeed;*/
+	bool				withoutRootStart = false;
 	bool				IsPlayerTryingToMove = false;
 	bool				IsDodging = false;
 	bool				IsAttacking = false;
@@ -147,6 +147,7 @@ private:
 	FOnMontageEnded		DoNothingDelegate;
 	FOnMontageEnded		FinishAttackDelegate;
 	float				previusVelocity = 0;
+	UInputComponent*	_PlayerInputComponent;
 
 	// Attack animation
 	bool IsAttackEnding = false;

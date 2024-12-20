@@ -5,29 +5,45 @@
 AMyAIController::AMyAIController(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCrowdFollowingComponent>(TEXT("PathFollowingComponent")))
 {
-	MoveDelay = 0.1f;
 }
 
 void AMyAIController::BeginPlay()
 {
 	Super::BeginPlay();
-
 	UCrowdFollowingComponent* CrowdFollowingComponent = FindComponentByClass<UCrowdFollowingComponent>();
 	if (CrowdFollowingComponent)
 	{
 		UE_LOG(LogTemp, Log, TEXT("CrowdFollowingComponent found"));
+		CrowdFollowingComponent->SetCrowdCollisionQueryRange(300);
 		CrowdFollowingComponent->SetCrowdSeparation(true);
-		CrowdFollowingComponent->SetCrowdSeparationWeight(10.0f);
+		CrowdFollowingComponent->SetCrowdSeparationWeight(100.0f);
 		CrowdFollowingComponent->SetCrowdAvoidanceRangeMultiplier(1.f);
 		CrowdFollowingComponent->SetCrowdAvoidanceQuality(ECrowdAvoidanceQuality::High);
 	}
 
 	// Get reference to the player pawn
 	PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
-	if (PlayerPawn)
+}
+
+void AMyAIController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+	Agent = Cast<AMyProjectCharacter>(InPawn);
+	if (Agent)
 	{
-		// Start following the player
-		FollowPlayer();
+		Agent->SwitchToRunning();
+		Agent->GetCharacterMovement()->MaxAcceleration = 200048.0f;
+		Agent->GetCharacterMovement()->bRequestedMoveUseAcceleration = false;
+		Agent->GetCharacterMovement()->RotationRate = FRotator(0.0f, 100.0f, 0.0f);
+		Agent->GetCharacterMovement()->MaxWalkSpeed = 200.0f; // Set the desired speed
+		Agent->GetCharacterMovement()->MinAnalogWalkSpeed = 150.0f; // Optional: Minimum speed for analog input
+		Agent->GetCharacterMovement()->bUseRVOAvoidance = true;
+		Agent->GetCharacterMovement()->AvoidanceConsiderationRadius = 42.0f;
+		Agent->GetCharacterMovement()->AvoidanceWeight = 0.6f;
+		Agent->GetCapsuleComponent()->SetSimulatePhysics(false);
+		Agent->GetCapsuleComponent()->SetEnableGravity(false);
+		Agent->GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+		MoveToPlayer();
 	}
 }
 
@@ -38,94 +54,92 @@ void AMyAIController::OnMoveCompleted(FAIRequestID RequestID, const FPathFollowi
 	AMyProjectCharacter* ControlledCharacter = Cast<AMyProjectCharacter>(GetPawn());
 	if (ControlledCharacter)
 	{
+		follow = false;
 		ControlledCharacter->SetIsPlayerTryingToMove(false);
 	}
 }
 
-void AMyAIController::FollowPlayer()
+void AMyAIController::Tick(float DeltaSeconds)
 {
-	if (PlayerPawn)
+	Super::Tick(DeltaSeconds);
+	FVector PlayerLocation = PlayerPawn->GetActorLocation();
+	FVector AILocation = GetPawn()->GetActorLocation();
+
+	if (!PlayerPawn)
+		return;
+	FVector CurrentPlayerLocation = PlayerPawn->GetActorLocation();
+	if (bIsInitialTick)
 	{
-		UE_LOG(LogTemp, Log, TEXT("AI begin follow"));
-		// Schedule the first call to MoveToPlayer
-		GetWorld()->GetTimerManager().SetTimer(TimerHandle_MoveToActor, this, &AMyAIController::MoveToPlayer, MoveDelay, true, 0);
+		PreviousPlayerLocation = CurrentPlayerLocation;
+	}
+	float	DistancePlayerMoved = FVector::Dist(PreviousPlayerLocation, CurrentPlayerLocation);
+	FVector CurrentAgentLocation = GetPawn()->GetActorLocation();
+	float	DistanceAgentMoved = FVector::Dist(PreviousAgentLocation, CurrentAgentLocation);
+
+	PreviousAgentLocation = CurrentAgentLocation;
+
+	float				 DistanceToPlayer = FVector::Dist(AILocation, PlayerLocation);
+	AMyProjectCharacter* ControlledCharacter = Cast<AMyProjectCharacter>(GetPawn());
+	if (ControlledCharacter)
+	{
+		if (follow && DistanceAgentMoved == 0)
+		{
+			StopMovement();
+		}
+		if (DistanceToPlayer > 500)
+		{
+			ControlledCharacter->SwitchToRunning();
+		}
+		else
+		{
+			ControlledCharacter->SwitchToWalking();
+		}
+	}
+	if (DistancePlayerMoved > 0 && !follow)
+	{
+		PreviousPlayerLocation = CurrentPlayerLocation; // Update the previous location
+		MoveToPlayer();
+	}
+	UCrowdFollowingComponent* CrowdComponent = FindComponentByClass<UCrowdFollowingComponent>();
+	if (CrowdComponent)
+	{
+		const FVector AiDirection = CrowdComponent->GetCurrentDirection();
+
+		if (ControlledCharacter)
+		{
+			ControlledCharacter->SetMovementVector(FVector2D(AiDirection.Y, AiDirection.X));
+		}
+	}
+	if (bIsInitialTick)
+	{
+		bIsInitialTick = false;
 	}
 }
-
 void AMyAIController::MoveToPlayer()
 {
-	if (PlayerPawn)
+	if (!PlayerPawn)
+		return;
+
+	FVector PlayerLocation = PlayerPawn->GetActorLocation();
+	FVector AILocation = GetPawn()->GetActorLocation();
+
+	float				 DistanceToPlayer = FVector::Dist(AILocation, PlayerLocation);
+
+	EPathFollowingRequestResult::Type MoveResult = MoveToLocation(PlayerLocation, 50);
+
+	if (MoveResult == 0)
 	{
-		FVector PlayerLocation = PlayerPawn->GetActorLocation();
-		FVector AILocation = GetPawn()->GetActorLocation();
-
-		// Calculate the distance between the AI and the player
-		float DistanceToPlayer = FVector::Dist(AILocation, PlayerLocation);
-
-		// Move to the player if the distance is greater than the acceptance radius
-		AMyProjectCharacter* ControlledCharacter = Cast<AMyProjectCharacter>(GetPawn());
-		if (ControlledCharacter && DistanceToPlayer > 200)
-		{
-			UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
-			FNavLocation		 ClosestReachablePoint;
-			if (NavSys)
-			{
-				bool bProjected = NavSys->ProjectPointToNavigation(
-					PlayerLocation,
-					ClosestReachablePoint,
-					FVector(100, 100, 100) // Define search area
-				);
-				if (bProjected)
-				{
-					UNavigationPath* NavPath = NavSys->FindPathToLocationSynchronously(
-						GetWorld(),
-						GetPawn()->GetActorLocation(),
-						ClosestReachablePoint.Location);
-					if (NavPath && NavPath->IsValid())
-					{
-						UE_LOG(LogTemp, Log, TEXT("Path found"));
-						// NavPath->PathPoints.Last();
-						EPathFollowingRequestResult::Type MoveResult = MoveToLocation(NavPath->PathPoints.Last());
-						UE_LOG(LogTemp, Log, TEXT("NPC follow Location: %s"), *NavPath->PathPoints.Last().ToString());
-						UE_LOG(LogTemp, Log, TEXT("Player Location: %s"), *PlayerLocation.ToString());
-						if (MoveResult == 0)
-						{
-							UE_LOG(LogTemp, Log, TEXT("MoveResult Failed"));
-							// follow = true;
-							ControlledCharacter->SetIsPlayerTryingToMove(false);
-						}
-						if (MoveResult == 1)
-						{
-							UE_LOG(LogTemp, Log, TEXT("MoveResult AlreadyAtGoal"));
-							// follow = true;
-							ControlledCharacter->SetIsPlayerTryingToMove(false);
-						}
-						if (MoveResult == 2)
-						{
-							UE_LOG(LogTemp, Log, TEXT("MoveResult RequestSuccessful"));
-							ControlledCharacter->SetIsPlayerTryingToMove(true);
-						}
-					}
-				}
-			}
-			// EPathFollowingRequestResult::Type MoveResult = MoveToActor(PlayerPawn, 50, true, true, true, nullptr, true);
-			// if (MoveResult == 0)
-			//{
-			//	UE_LOG(LogTemp, Log, TEXT("MoveResult Failed"));
-			//	// follow = true;
-			//	ControlledCharacter->SetIsPlayerTryingToMove(false);
-			// }
-			// if (MoveResult == 1)
-			//{
-			//	UE_LOG(LogTemp, Log, TEXT("MoveResult AlreadyAtGoal"));
-			//	// follow = true;
-			//	ControlledCharacter->SetIsPlayerTryingToMove(false);
-			// }
-			// if (MoveResult == 2)
-			//{
-			//	UE_LOG(LogTemp, Log, TEXT("MoveResult RequestSuccessful"));
-			//	ControlledCharacter->SetIsPlayerTryingToMove(true);
-			// }
-		}
+		follow = false;
+		Agent->SetIsPlayerTryingToMove(false);
+	}
+	if (MoveResult == 1)
+	{
+		follow = false;
+		Agent->SetIsPlayerTryingToMove(false);
+	}
+	if (MoveResult == 2)
+	{
+		follow = true;
+		Agent->SetIsPlayerTryingToMove(true);
 	}
 }

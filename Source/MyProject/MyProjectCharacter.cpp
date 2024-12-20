@@ -24,6 +24,8 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 		GetMesh()->SetSkeletalMesh(MeshAsset.Object);
 		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -90.0f));
 		GetMesh()->SetRelativeRotation(FRotator(0.0f, 270.0f, 0.0f));
+		GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		GetMesh()->SetCollisionResponseToAllChannels(ECR_Ignore);
 	}
 	WeaponMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WeaponMesh"));
 	WeaponMesh->SetupAttachment(GetMesh(), TEXT("weapon_r"));
@@ -31,7 +33,6 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	if (WeaponMeshAsset.Succeeded())
 	{
 		WeaponMesh->SetStaticMesh(WeaponMeshAsset.Object);
-		// Disable collision for the weapon mesh
 		WeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		WeaponMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
 	}
@@ -44,11 +45,6 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	if (ContextFinder.Succeeded())
 	{
 		DefaultMappingContext = ContextFinder.Object;
-	}
-	static ConstructorHelpers::FObjectFinder<UInputAction> MoveInputActionAsset(TEXT("/Script/EnhancedInput.InputAction'/Game/ThirdPerson/Input/Actions/IA_Move.IA_Move'"));
-	if (MoveInputActionAsset.Succeeded())
-	{
-		MoveAction = MoveInputActionAsset.Object;
 	}
 	static ConstructorHelpers::FObjectFinder<UInputAction> JumpInputActionAsset(TEXT("/Script/EnhancedInput.InputAction'/Game/ThirdPerson/Input/Actions/IA_Jump.IA_Jump'"));
 	if (JumpInputActionAsset.Succeeded())
@@ -64,6 +60,18 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	if (DodgeMontageAsset.Succeeded())
 	{
 		DodgeMontage = DodgeMontageAsset.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartFMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_F_Montage.Start_F_Montage'"));
+	if (StartFMontageAsset.Succeeded())
+	{
+		StartFMontage = StartFMontageAsset.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartRMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_R_Montage.Start_R_Montage'"));
+	if (StartRMontageAsset.Succeeded())
+	{
+		StartRMontage = StartRMontageAsset.Object;
 	}
 
 	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Attack/Attack_Montage.Attack_Montage'"));
@@ -95,7 +103,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	// Configure character movement
 	GetCharacterMovement()->bOrientRotationToMovement = true; // Character moves in the direction of input...
 	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = false;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 200.0f, 0.0f); // ...at this rotation rate
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f); // ...at this rotation rate
 	GetCharacterMovement()->JumpZVelocity = 700.f;
 	GetCharacterMovement()->AirControl = 0.35f;
 	GetCharacterMovement()->MaxWalkSpeed = 600.f;
@@ -103,8 +111,6 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	GetCharacterMovement()->GroundFriction = 0.1;
 	GetCharacterMovement()->BrakingDecelerationWalking = 1000;
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
-	// GetCharacterMovement()->UseAccelerationForPathFollowing();
-	// GetCharacterMovement()->bUseAccelerationForPaths = true;
 	bUseControllerRotationYaw = false;
 
 	CameraRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CameraRoot"));
@@ -114,7 +120,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(CameraRoot);
-	CameraBoom->TargetArmLength = 400.0f; // The camera follows at this distance behind the character
+	CameraBoom->TargetArmLength = 600.0f; // The camera follows at this distance behind the character
 	CameraBoom->bDoCollisionTest = false;
 	CameraBoom->bUsePawnControlRotation = false;
 	CameraBoom->bInheritYaw = false;
@@ -132,35 +138,25 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	DoNothingDelegate.BindUObject(this, &AMyProjectCharacter::DoNothing);
 
 	ProjectileClass = AMageProjectile::StaticClass();
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+
+	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
+
+	bReplicates = true;
 }
 
-void AMyProjectCharacter::InitializeCharacter(bool _isAI, UClass* _AIControllerClass)
+void AMyProjectCharacter::PossessAIController(UClass* _AIControllerClass)
 {
-	isAI = _isAI;
-	if (_isAI)
+	AIControllerClass = _AIControllerClass;
+	if (AIControllerClass)
 	{
-		SwitchToWalking();
-		/*GetCapsuleComponent()->SetCollisionProfileName(TEXT("Custom"));
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);*/
-		GetCharacterMovement()->MaxAcceleration = 200048.0f;
-		/*GetCharacterMovement()->JumpZVelocity = 0.0f;
-		GetCapsuleComponent()->SetSimulatePhysics(false);
-		GetCapsuleComponent()->BodyInstance.bLockXTranslation = true;
-		GetCapsuleComponent()->BodyInstance.bLockYTranslation = true;
-		GetCapsuleComponent()->BodyInstance.bLockZTranslation = true;
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
-		GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);*/
-		AIControllerClass = _AIControllerClass;
-		if (AIControllerClass)
+		AAIController* AIController = Cast<AAIController>(GetController());
+		if (!AIController)
 		{
-			AAIController* AIController = Cast<AAIController>(GetController());
-			if (!AIController)
+			AIController = GetWorld()->SpawnActor<AAIController>(AIControllerClass);
+			if (AIController)
 			{
-				AIController = GetWorld()->SpawnActor<AAIController>(AIControllerClass);
-				if (AIController)
-				{
-					AIController->Possess(this);
-				}
+				AIController->Possess(this);
 			}
 		}
 	}
@@ -199,14 +195,19 @@ void AMyProjectCharacter::SmoothlyRotate(float degrees, float speed)
 	SmoothRotationElapsedTime = 0.f;
 }
 
+bool AMyProjectCharacter::GetWithoutRootStart()
+{
+	return withoutRootStart;
+}
+
 bool AMyProjectCharacter::GetIsWalking()
 {
-	return GetCharacterMovement()->MaxWalkSpeed <= 200;
+	UE_LOG(LogTemp, Warning, TEXT("Velocity: %f"), GetCharacterMovement()->Velocity.Size());
+	return GetCharacterMovement()->Velocity.Size() <= 300;
 }
 
 float AMyProjectCharacter::GetInputDirection() const
 {
-	// If there's no input, return 0
 	if (MovementVector.IsNearlyZero())
 	{
 		return 0.0f;
@@ -224,6 +225,11 @@ float AMyProjectCharacter::GetInputDirection() const
 bool AMyProjectCharacter::GetIsDodging() const
 {
 	return IsDodging;
+}
+
+bool AMyProjectCharacter::GetIsAttacking() const
+{
+	return IsAttacking;
 }
 
 void AMyProjectCharacter::SetIsInRollAnimation(bool value)
@@ -253,7 +259,6 @@ void AMyProjectCharacter::FireProjectile()
 {
 	if (ProjectileClass)
 	{
-		UE_LOG(LogTemp, Log, TEXT("Projectile class exists"));
 		FVector	 SpawnLocation = ProjectileSpawnPoint->GetComponentLocation();
 		FRotator SpawnRotation = ProjectileSpawnPoint->GetComponentRotation();
 
@@ -265,7 +270,6 @@ void AMyProjectCharacter::FireProjectile()
 
 		if (Projectile)
 		{
-			UE_LOG(LogTemp, Log, TEXT("Projectile spawned"));
 			FVector LaunchDirection = SpawnRotation.Vector();
 			Projectile->ProjectileMovement->Velocity = LaunchDirection * Projectile->ProjectileMovement->InitialSpeed;
 		}
@@ -275,9 +279,11 @@ void AMyProjectCharacter::FireProjectile()
 // Input
 void AMyProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-	//  Add Input Mapping Context
+	_PlayerInputComponent = PlayerInputComponent;
+	InputHandler->SetupPlayerInputComponent(_PlayerInputComponent, GetController());
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
+		UE_LOG(LogTemp, Error, TEXT("PlayerController here!"));
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
 		{
 			Subsystem->AddMappingContext(DefaultMappingContext, 0);
@@ -287,16 +293,6 @@ void AMyProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 	// Set up action bindings
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
-
-		// Jumping
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
-
-		// Moving
-		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AMyProjectCharacter::Move);
-		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Ongoing, this, &AMyProjectCharacter::OnMoving);
-		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::None, this, &AMyProjectCharacter::OnIdle);
-
 		PlayerInputComponent->BindTouch(IE_Pressed, this, &AMyProjectCharacter::OnSwipeStarted);
 		PlayerInputComponent->BindTouch(IE_Repeat, this, &AMyProjectCharacter::OnSwipeUpdated);
 		PlayerInputComponent->BindTouch(IE_Released, this, &AMyProjectCharacter::OnSwipeEnded);
@@ -316,17 +312,30 @@ void AMyProjectCharacter::Tick(float DeltaTime)
 	}
 
 	float Velocity = GetCharacterMovement()->Velocity.Size();
-	/*if (Velocity == 0)
+	if (FMath::Abs(previusVelocity - Velocity) > 500)
 	{
-		IsPlayerTryingToMove = false;
-	}*/
-	// UE_LOG(LogTemp, Log, TEXT("newVelocity %f"), newVelocity);
-	///*if (newVelocity >= previusVelocity) {
-	//	IsPlayerTryingToMove =
-	//}*/
-	// IsPlayerTryingToMove = newVelocity != 0 && newVelocity >= previusVelocity;
-	// previusVelocity = newVelocity;
-	// IsPlayerTryingToMove = !Velocity.IsNearlyZero();
+		UE_LOG(LogTemp, Warning, TEXT("High velocity diff: %f"), FMath::Abs(previusVelocity - Velocity));
+	}
+	previusVelocity = Velocity;
+}
+
+void AMyProjectCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Character is possessed by: %s"), *PC->GetName());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Character is not possessed!"));
+	}
+	//SwitchToWalking();
+	/*SwitchToWalking();
+	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;*/
+	UE_LOG(LogTemp, Warning, TEXT("on SetupPlayerInputComponent trigger"));
+	/*InputHandler->SetupPlayerInputComponent(_PlayerInputComponent);*/
 }
 
 void AMyProjectCharacter::OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location)
@@ -356,27 +365,17 @@ void AMyProjectCharacter::OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Lo
 		switch (DetectedGesture)
 		{
 			case EGestureType::SwipeRight:
-				UE_LOG(LogTemp, Log, TEXT("Swipe Right detected"));
-				// Add your game logic for swipe right
 				break;
 			case EGestureType::SwipeLeft:
-				UE_LOG(LogTemp, Log, TEXT("Swipe Left detected"));
-				// Add your game logic for swipe left
 				break;
 			case EGestureType::SwipeUp:
-				UE_LOG(LogTemp, Log, TEXT("Swipe Up detected"));
 				break;
 			case EGestureType::SwipeDown:
-				UE_LOG(LogTemp, Log, TEXT("Swipe Down detected"));
 				StartDodge();
-				// Add your game logic for swipe down
 				break;
 			case EGestureType::Circle:
-				UE_LOG(LogTemp, Log, TEXT("Circle gesture detected"));
-				// Add your game logic for circle gesture
 				break;
 			case EGestureType::None:
-				UE_LOG(LogTemp, Log, TEXT("No gesture detected"));
 				std::random_device					  rd;
 				std::mt19937						  gen(rd());
 				std::uniform_real_distribution<float> dis(-90.0, 90.0);
@@ -419,7 +418,6 @@ void AMyProjectCharacter::StartAttack()
 void AMyProjectCharacter::FinishAttack(UAnimMontage* Montage, bool bInterrupted)
 {
 	IsAttacking = false;
-	UE_LOG(LogTemp, Warning, TEXT("Boolean value is: %s"), bInterrupted ? TEXT("true") : TEXT("false"));
 	if (!bInterrupted)
 	{
 		SwitchToRunning();
@@ -437,13 +435,18 @@ void AMyProjectCharacter::SwitchToRunning()
 	GetCharacterMovement()->MaxWalkSpeed = 600.f;
 }
 
+void AMyProjectCharacter::SetMovementVector(FVector2D _MovementVector)
+{
+	MovementVector = _MovementVector;
+}
+
 void AMyProjectCharacter::DoNothing(UAnimMontage* Montage, bool bInterrupted)
 {
 }
 
 void AMyProjectCharacter::StartDodge()
 {
-	if (!IsDodging)
+	 if (!IsDodging)
 	{
 		SwitchToRunning();
 		GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;
@@ -453,40 +456,14 @@ void AMyProjectCharacter::StartDodge()
 		FOnMontageEnded BlendingOutDelegate;
 		BlendingOutDelegate.BindUObject(this, &AMyProjectCharacter::FinishDodge);
 		AnimInstance->Montage_SetBlendingOutDelegate(BlendingOutDelegate, DodgeMontage);
-	}
+	 }
+	/*UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	AnimInstance->Montage_Play(StartFMontage);
+	AnimInstance->Montage_Play(StartRMontage);*/
 }
 
 void AMyProjectCharacter::FinishDodge(UAnimMontage* Montage, bool bInterrupted)
 {
 	IsDodging = false;
 	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = false;
-}
-
-void AMyProjectCharacter::Move(const FInputActionValue& Value)
-{
-	IsPlayerTryingToMove = true;
-	//  input is a Vector2D
-	MovementVector = Value.Get<FVector2D>();
-	MovementVector = MovementVector.GetRotated(RollMovementRotation);
-
-	if (Controller != nullptr)
-	{
-		// Move in world space
-		const FVector ForwardDirection = FVector::ForwardVector;
-		const FVector RightDirection = FVector::RightVector;
-
-		// Add movement input
-		AddMovementInput(ForwardDirection, MovementVector.Y);
-		AddMovementInput(RightDirection, MovementVector.X);
-	}
-}
-
-void AMyProjectCharacter::OnMoving()
-{
-	IsPlayerTryingToMove = true;
-}
-
-void AMyProjectCharacter::OnIdle()
-{
-	IsPlayerTryingToMove = false;
 }

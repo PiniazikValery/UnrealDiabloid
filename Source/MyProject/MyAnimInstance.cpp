@@ -45,6 +45,8 @@ void UMyAnimInstance::SetMovementProperties()
 {
 	LookRotation = CharacterReference->GetLookRotation();
 	IsWalking = CharacterReference->GetIsWalking();
+	IsWithoutRootStart = CharacterReference->GetWithoutRootStart();
+	IsAttacking = CharacterReference->GetIsAttacking();
 	IsPlayerTryingToMove = CharacterReference->GetIsPlayerTryingToMove();
 	float NextInputDirection = FMath::UnwindDegrees(CharacterReference->GetInputDirection() - StartYaw);
 	if (!IsPlayerTryingToMove || FMath::Abs(InputDirection - NextInputDirection) >= 45)
@@ -64,34 +66,42 @@ void UMyAnimInstance::SetMovementInput()
 {
 	if (Direction > -22.5 && Direction < 22.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Forward"));
 		MovementInput = EMovementInput::Forward;
 	}
 	else if (Direction >= 22.5 && Direction <= 67.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("ForwardRight"));
 		MovementInput = EMovementInput::ForwardRight;
 	}
 	else if (Direction > 67.5 && Direction < 112.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Right"));
 		MovementInput = EMovementInput::Right;
 	}
 	else if (Direction >= 112.5 && Direction <= 157.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("BackwardRight"));
 		MovementInput = EMovementInput::BackwardRight;
 	}
 	else if (Direction > 157.5 || Direction < -157.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Backward"));
 		MovementInput = EMovementInput::Backward;
 	}
 	else if (Direction >= -157.5 && Direction <= -112.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("BackwardLeft"));
 		MovementInput = EMovementInput::BackwardLeft;
 	}
 	else if (Direction > -112.5 && Direction < -67.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Left"));
 		MovementInput = EMovementInput::Left;
 	}
 	else if (Direction >= -67.5 && Direction <= -22.5)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("ForwardLeft"));
 		MovementInput = EMovementInput::ForwardLeft;
 	}
 }
