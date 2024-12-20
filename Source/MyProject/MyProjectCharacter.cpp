@@ -103,10 +103,10 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	// Configure character movement
 	GetCharacterMovement()->bOrientRotationToMovement = true; // Character moves in the direction of input...
 	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = false;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f); // ...at this rotation rate
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, 400.0f, 0.0f); // ...at this rotation rate
 	GetCharacterMovement()->JumpZVelocity = 700.f;
 	GetCharacterMovement()->AirControl = 0.35f;
-	GetCharacterMovement()->MaxWalkSpeed = 600.f;
+	GetCharacterMovement()->MaxWalkSpeed = 500.f;
 	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
 	GetCharacterMovement()->GroundFriction = 0.1;
 	GetCharacterMovement()->BrakingDecelerationWalking = 1000;
@@ -432,7 +432,7 @@ void AMyProjectCharacter::SwitchToWalking()
 void AMyProjectCharacter::SwitchToRunning()
 {
 	SmoothlyRotate(0, 10);
-	GetCharacterMovement()->MaxWalkSpeed = 600.f;
+	GetCharacterMovement()->MaxWalkSpeed = 500.f;
 }
 
 void AMyProjectCharacter::SetMovementVector(FVector2D _MovementVector)
