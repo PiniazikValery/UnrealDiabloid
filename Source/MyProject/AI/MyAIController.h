@@ -19,27 +19,30 @@
  *
  */
 UCLASS()
-class MYPROJECT_API AMyAIController : public AAIController
+class AMyAIController : public AAIController
 {
 	GENERATED_BODY()
 
 public:
 	AMyAIController(const FObjectInitializer& ObjectInitializer);
-	virtual void BeginPlay() override;
-	virtual void OnPossess(APawn* InPawn) override;
+
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void OnPossess(APawn* InPawn) override;
+	virtual void BeginPlay() override;
 	virtual void OnMoveCompleted(FAIRequestID RequestID, const FPathFollowingResult& Result) override;
-	void		 MoveToPlayer();
-
-	FTimerHandle TimerHandle_MoveToActor;
-
-protected:
-	APawn*				 PlayerPawn;
-	AMyProjectCharacter* Agent;
-	FVector				 PreviousPlayerLocation;
-	FVector				 PreviousAgentLocation;
 
 private:
-	bool follow = false;
-	bool bIsInitialTick = true;
+	UPROPERTY()
+	AMyProjectCharacter* Agent = nullptr;
+
+	UPROPERTY()
+	APawn* PlayerPawn = nullptr;
+
+	FVector PreviousPlayerLocation = FVector::ZeroVector;
+	FVector LocationToMove = FVector::ZeroVector;
+
+	bool  bIsInAttackRange = false;
+	float TimeSinceLastMoveRequest = 0.f;
+
+	void MoveToPlayer();
 };

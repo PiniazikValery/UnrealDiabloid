@@ -38,4 +38,6 @@ public:
 private:
 	UFUNCTION()
 	void OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
+	float InitialHoverHeight = 0.0f;
+	float HoverAdjustTolerance = 10.0f;
 };

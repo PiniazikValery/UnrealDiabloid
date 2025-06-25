@@ -4,6 +4,7 @@ Saved/
 DerivedDataCache/
 Intermediate/
 Binaries/
+Build/
 
 # Ignore Mac OS system files
 .DS_Store

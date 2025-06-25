@@ -8,7 +8,6 @@
 
 void UCharacterInput::onTriggeredMove(const FInputActionValue& Value)
 {
-	UE_LOG(LogTemp, Warning, TEXT("onTriggeredMove fired"));
 	MyCharacter->SetIsPlayerTryingToMove(true);
 	FVector2D MovementVector(Value.Get<FVector2D>().GetRotated(0.f));
 	MyCharacter->SetMovementVector(MovementVector);

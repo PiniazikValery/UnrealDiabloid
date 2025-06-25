@@ -8,7 +8,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "AI/NavigationSystemBase.h"
 #include "NavigationSystem.h"
- #include "./AI/MyAIController.h"
+#include "./AI/MyAIController.h"
+#include "./AI/AEnemySpawner.h"
 #include "MyProjectGameMode.generated.h"
 
 UCLASS(minimalapi)
@@ -21,5 +22,11 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
+
+private:
 	void SpawnCharacterAtReachablePointTest();
+	void SpawnLandscapeGenerator();
+	void SetupNavigation();
+	void SpawnEnemySpawner();
+	void SpawnWarmupManager();
 };

@@ -11,6 +11,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
+#include "Net/UnrealNetwork.h"
 
 //////////////////////////////////////////////////////////////////////////
 // AMyProjectCharacter
@@ -36,7 +37,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 		WeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		WeaponMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
 	}
-	static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBPClass(TEXT("/Script/Engine.AnimBlueprint'/Game/Characters/Mannequins/Animations/ABP_Manny.ABP_Manny_C'"));
+	static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBPClass(TEXT("/Script/Engine.AnimBlueprint'/Game/Characters/Mannequins/Animations/ABP.ABP_C'"));
 	if (AnimBPClass.Succeeded())
 	{
 		GetMesh()->SetAnimInstanceClass(AnimBPClass.Class);
@@ -111,6 +112,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	GetCharacterMovement()->GroundFriction = 0.1;
 	GetCharacterMovement()->BrakingDecelerationWalking = 1000;
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
+	GetCharacterMovement()->bUseFlatBaseForFloorChecks = true;
 	bUseControllerRotationYaw = false;
 
 	CameraRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CameraRoot"));
@@ -120,7 +122,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(CameraRoot);
-	CameraBoom->TargetArmLength = 600.0f; // The camera follows at this distance behind the character
+	CameraBoom->TargetArmLength = 900.0f; // The camera follows at this distance behind the character
 	CameraBoom->bDoCollisionTest = false;
 	CameraBoom->bUsePawnControlRotation = false;
 	CameraBoom->bInheritYaw = false;
@@ -128,7 +130,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	CameraBoom->bInheritRoll = false;
 	CameraBoom->bEnableCameraLag = false;
 	CameraBoom->bEnableCameraRotationLag = false;
-	CameraBoom->SetRelativeRotation(FRotator(-45.f, 0.f, 0.f));
+	CameraBoom->SetRelativeRotation(FRotator(-30.f, 0.f, 0.f));
 
 	// Create a follow camera
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
@@ -169,7 +171,10 @@ bool AMyProjectCharacter::GetIsPlayerTryingToMove()
 
 void AMyProjectCharacter::SetIsPlayerTryingToMove(bool value)
 {
-	IsPlayerTryingToMove = value;
+	if (IsLocallyControlled())
+	{
+		ServerSetIsPlayerTryingToMove(value);
+	}
 }
 
 void AMyProjectCharacter::SetAllowPhysicsRotationDuringAnimRootMotion(bool value)
@@ -202,7 +207,6 @@ bool AMyProjectCharacter::GetWithoutRootStart()
 
 bool AMyProjectCharacter::GetIsWalking()
 {
-	UE_LOG(LogTemp, Warning, TEXT("Velocity: %f"), GetCharacterMovement()->Velocity.Size());
 	return GetCharacterMovement()->Velocity.Size() <= 300;
 }
 
@@ -283,7 +287,6 @@ void AMyProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 	InputHandler->SetupPlayerInputComponent(_PlayerInputComponent, GetController());
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
-		UE_LOG(LogTemp, Error, TEXT("PlayerController here!"));
 		if (UEnhancedInputLocalPlayerSubsystem* Subsystem = ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PlayerController->GetLocalPlayer()))
 		{
 			Subsystem->AddMappingContext(DefaultMappingContext, 0);
@@ -312,10 +315,6 @@ void AMyProjectCharacter::Tick(float DeltaTime)
 	}
 
 	float Velocity = GetCharacterMovement()->Velocity.Size();
-	if (FMath::Abs(previusVelocity - Velocity) > 500)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("High velocity diff: %f"), FMath::Abs(previusVelocity - Velocity));
-	}
 	previusVelocity = Velocity;
 }
 
@@ -323,19 +322,14 @@ void AMyProjectCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 	APlayerController* PC = Cast<APlayerController>(GetController());
-	if (PC)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Character is possessed by: %s"), *PC->GetName());
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("Character is not possessed!"));
-	}
-	//SwitchToWalking();
-	/*SwitchToWalking();
-	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;*/
-	UE_LOG(LogTemp, Warning, TEXT("on SetupPlayerInputComponent trigger"));
-	/*InputHandler->SetupPlayerInputComponent(_PlayerInputComponent);*/
+}
+
+void AMyProjectCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	// Replicate variables
+	DOREPLIFETIME(AMyProjectCharacter, IsPlayerTryingToMove);
 }
 
 void AMyProjectCharacter::OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location)
@@ -371,18 +365,36 @@ void AMyProjectCharacter::OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Lo
 			case EGestureType::SwipeUp:
 				break;
 			case EGestureType::SwipeDown:
-				StartDodge();
+				if (HasAuthority()) {
+					MulticastStartDodge();
+				}
+				else
+				{
+					ServerStartDodge();
+				}
 				break;
 			case EGestureType::Circle:
 				break;
 			case EGestureType::None:
-				std::random_device					  rd;
+				/*std::random_device					  rd;
 				std::mt19937						  gen(rd());
 				std::uniform_real_distribution<float> dis(-90.0, 90.0);
 				float								  randomFloat = dis(gen);
 
 				SmoothlyRotate(randomFloat, 1);
-				StartAttack();
+				StartAttack();*/
+				std::random_device					  rd;
+				std::mt19937						  gen(rd());
+				std::uniform_real_distribution<float> dis(-90.0, 90.0);
+				float								  randomFloat = dis(gen);
+				if (HasAuthority())
+				{
+					MulticastStartAttack(randomFloat);
+				}
+				else
+				{
+					ServerStartAttack(randomFloat);
+				}
 				break;
 		}
 
@@ -440,13 +452,54 @@ void AMyProjectCharacter::SetMovementVector(FVector2D _MovementVector)
 	MovementVector = _MovementVector;
 }
 
+void AMyProjectCharacter::ServerSetIsPlayerTryingToMove_Implementation(bool NewIsPlayerTryingToMove)
+{
+	IsPlayerTryingToMove = NewIsPlayerTryingToMove;
+}
+
+bool AMyProjectCharacter::ServerSetIsPlayerTryingToMove_Validate(bool NewIsPlayerTryingToMove)
+{
+	return true;
+}
+
+void AMyProjectCharacter::ServerStartDodge_Implementation()
+{
+	MulticastStartDodge();
+}
+
+bool AMyProjectCharacter::ServerStartDodge_Validate()
+{
+	return true;
+}
+
+void AMyProjectCharacter::MulticastStartDodge_Implementation()
+{
+	StartDodge();
+}
+
+void AMyProjectCharacter::ServerStartAttack_Implementation(float angle)
+{
+	MulticastStartAttack(angle);
+}
+
+bool AMyProjectCharacter::ServerStartAttack_Validate(float angle)
+{
+	return true;
+}
+
+void AMyProjectCharacter::MulticastStartAttack_Implementation(float angle)
+{
+	SmoothlyRotate(angle, 1);
+	StartAttack();
+}
+
 void AMyProjectCharacter::DoNothing(UAnimMontage* Montage, bool bInterrupted)
 {
 }
 
 void AMyProjectCharacter::StartDodge()
 {
-	 if (!IsDodging)
+	if (!IsDodging)
 	{
 		SwitchToRunning();
 		GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;
@@ -456,7 +509,7 @@ void AMyProjectCharacter::StartDodge()
 		FOnMontageEnded BlendingOutDelegate;
 		BlendingOutDelegate.BindUObject(this, &AMyProjectCharacter::FinishDodge);
 		AnimInstance->Montage_SetBlendingOutDelegate(BlendingOutDelegate, DodgeMontage);
-	 }
+	}
 	/*UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
 	AnimInstance->Montage_Play(StartFMontage);
 	AnimInstance->Montage_Play(StartRMontage);*/

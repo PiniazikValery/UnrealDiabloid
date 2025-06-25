@@ -35,6 +35,8 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float GroundSpeed;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
+	float MaxSpeed;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	bool ShouldMove;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	bool IsFalling;
@@ -47,7 +49,7 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float StartYaw;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
-	EMovementInput MovementInput;
+	EMovementInput MovementInput = EMovementInput::Forward;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float DistanceTraveled;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")

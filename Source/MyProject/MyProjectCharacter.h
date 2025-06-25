@@ -24,6 +24,15 @@ class UInputMappingContext;
 class UInputAction;
 struct FInputActionValue;
 
+UENUM(BlueprintType)
+enum class EEnemyType : uint8
+{
+	E_None	 UMETA(DisplayName = "None"),
+	E_Melee	 UMETA(DisplayName = "Melee"),
+	E_Ranged UMETA(DisplayName = "Ranged"),
+	E_Tank	 UMETA(DisplayName = "Tank")
+};
+
 UCLASS(config = Game)
 class AMyProjectCharacter : public ACharacter
 {
@@ -67,6 +76,7 @@ class AMyProjectCharacter : public ACharacter
 	UPROPERTY(EditDefaultsOnly, Category = "Projectile")
 	TSubclassOf<class AMageProjectile> ProjectileClass;
 
+
 public:
 	AMyProjectCharacter(const FObjectInitializer& ObjectInitializer);
 	void PossessAIController(UClass* _AIControllerClass);
@@ -79,6 +89,11 @@ public:
 	void SwitchToWalking();
 	void SwitchToRunning();
 	void SetMovementVector(FVector2D _MovementVector);
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Character")
+	bool IsPlayerTryingToMove = false;
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerSetIsPlayerTryingToMove(bool NewIsPlayerTryingToMove);
+
 
 protected:
 	void StartDodge();
@@ -93,11 +108,25 @@ protected:
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 	virtual void Tick(float DeltaTime) override;
 	virtual void BeginPlay() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	// Gestures
 	void OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location);
 	void OnSwipeUpdated(ETouchIndex::Type FingerIndex, FVector Location);
 	void OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Location);
+	// Server RPC for playing montage
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerStartDodge();
+
+	// Multicast RPC to play montage on all clients
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastStartDodge();
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerStartAttack(float angle);
+
+	// Multicast RPC to play montage on all clients
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastStartAttack(float angle);
 
 public:
 	/** Returns CameraBoom subobject **/
@@ -129,7 +158,6 @@ public:
 private:
 	/*float				PreviousSpeed;*/
 	bool				withoutRootStart = false;
-	bool				IsPlayerTryingToMove = false;
 	bool				IsDodging = false;
 	bool				IsAttacking = false;
 	TArray<FVector>		SwipePoints;

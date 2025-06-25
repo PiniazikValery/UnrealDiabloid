@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #include "MageProjectile.h"
 
@@ -40,16 +40,6 @@ AMageProjectile::AMageProjectile()
 		ProjectileNiagaraComponent->SetAsset(ProjectileNiagaraSystem.Object);
 	}
 
-	// static ConstructorHelpers::FObjectFinder<UMaterial> RedMaterial(TEXT("/Script/Engine.MaterialFunction'/Game/Characters/Mannequins/Materials/Functions/ML_BaseColorFallOff.ML_BaseColorFallOff'")); // Replace with your material path
-	// if (RedMaterial.Succeeded())
-	//{
-	//	UMaterialInstanceDynamic* MaterialInstance = UMaterialInstanceDynamic::Create(RedMaterial.Object, ProjectileMesh);
-	//	if (MaterialInstance)
-	//	{
-	//		ProjectileMesh->SetMaterial(0, MaterialInstance);
-	//	}
-	// }
-
 	ProjectileMovement = CreateDefaultSubobject<UProjectileMovementComponent>(TEXT("ProjectileMovement"));
 	ProjectileMovement->UpdatedComponent = ProjectileMesh;
 	ProjectileMovement->InitialSpeed = 3000.0f;
@@ -63,12 +53,43 @@ AMageProjectile::AMageProjectile()
 void AMageProjectile::BeginPlay()
 {
 	Super::BeginPlay();
+	SetLifeSpan(5.0f);
+	FHitResult HitResult;
+	FVector	   Start = GetActorLocation();
+	FVector	   End = Start - FVector(0, 0, 10000);
+
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(this);
+
+	if (GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, ECC_Visibility, Params))
+	{
+		InitialHoverHeight = Start.Z - HitResult.ImpactPoint.Z;
+	}
 }
 
 // Called every frame
 void AMageProjectile::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	FHitResult HitResult;
+	FVector	   Start = GetActorLocation();
+	FVector	   End = Start - FVector(0, 0, 10000);
+
+	FCollisionQueryParams Params;
+	Params.AddIgnoredActor(this);
+
+	if (GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, ECC_Visibility, Params))
+	{
+		float CurrentHeight = Start.Z - HitResult.ImpactPoint.Z;
+
+		if (FMath::Abs(CurrentHeight - InitialHoverHeight) > HoverAdjustTolerance)
+		{
+			FVector NewLocation = GetActorLocation();
+			NewLocation.Z = HitResult.ImpactPoint.Z + InitialHoverHeight;
+			SetActorLocation(NewLocation);
+		}
+	}
 }
 
 void AMageProjectile::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)

@@ -5,7 +5,6 @@
 
 void UProjectileSpawnNotify::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation)
 {
-	UE_LOG(LogTemp, Log, TEXT("Projectile should be spawned"));
 	AMyProjectCharacter* Character = Cast<AMyProjectCharacter>(MeshComp->GetOwner());
 	if (Character)
 	{
