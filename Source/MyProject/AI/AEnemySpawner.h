@@ -21,7 +21,7 @@ protected:
 	virtual void BeginPlay() override;
 
 	UPROPERTY(EditAnywhere, Category = "Spawning")
-	int32 MaxEnemies = 50;
+	int32 MaxEnemies = 0;
 
 	UPROPERTY(EditAnywhere, Category = "Spawning")
 	int32 EnemiesPerWave = 3;

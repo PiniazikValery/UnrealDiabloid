@@ -405,6 +405,12 @@ void AMyProjectCharacter::OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Lo
 void AMyProjectCharacter::StartAttack()
 {
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance && AnimInstance->Montage_IsPlaying(DodgeMontage))
+	{
+		FVector Direction = GetActorForwardVector();
+		FVector NewVelocity = Direction * 800.f;
+		GetCharacterMovement()->Velocity = NewVelocity;  
+	}
 	SwitchToWalking();
 	if (IsSecondAttackWindowOpen)
 	{
