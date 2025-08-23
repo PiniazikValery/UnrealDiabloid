@@ -7,7 +7,7 @@
 //#include <numbers>
 #include "CoreMinimal.h"
 #include "Animation/AnimMontage.h"
-#include "MyGestureRecognizer.h"
+#include "UMyGestureRecognizer.h"
 #include "Enums/GestureType.h"
 #include "Components/ArrowComponent.h"
 #include "GameFramework/Character.h"
@@ -153,6 +153,8 @@ public:
 	void SetIsSecondAttackWindowOpen(bool value);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCharacterInput* InputHandler;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UMyGestureRecognizer* GestureRecognizer;
 	void FireProjectile();
 
 private:
@@ -163,7 +165,7 @@ private:
 	TArray<FVector>		SwipePoints;
 	bool				bIsSwipeInProgress;
 	FVector				SwipeStartLocation;
-	MyGestureRecognizer Recognizer;
+	// MyGestureRecognizer* GestureRecognizer;
 	FVector2D			MovementVector;
 	float				StartRollYaw;
 	float				RollMovementRotation = 0.f;
@@ -176,8 +178,17 @@ private:
 	FOnMontageEnded		FinishAttackDelegate;
 	float				previusVelocity = 0;
 	UInputComponent*	_PlayerInputComponent;
-
 	// Attack animation
 	bool IsAttackEnding = false;
 	bool IsSecondAttackWindowOpen = false;
+   	void InitializeMesh();
+	void InitializeWeapon();
+	void InitializeAnimations();
+	void InitializeInput();
+	void InitializeMovement();
+	void InitializeCamera();
+	void InitializeProjectileSpawnPoint();
+	void PlayMontage(UAnimMontage* Montage, FOnMontageEnded EndDelegate);
+	UFUNCTION()
+	void HandleGesture(EGestureType Gesture);
 };

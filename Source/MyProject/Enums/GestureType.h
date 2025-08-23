@@ -14,3 +14,5 @@ enum class EGestureType : uint8
 	SwipeDown  UMETA(DisplayName = "SwipeDown"),
 	Circle	   UMETA(DisplayName = "Circle"),
 };
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGestureRecognized, EGestureType, Gesture);

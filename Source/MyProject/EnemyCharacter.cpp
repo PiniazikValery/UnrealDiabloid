@@ -18,8 +18,8 @@ void AEnemyCharacter::ConfigureEnemyByType()
 	{
 		case EEnemyType::E_Melee:
 			GetCharacterMovement()->MaxWalkSpeed = 550.f;
-			GetCharacterMovement()->GroundFriction = 10;
-			GetCharacterMovement()->BrakingDecelerationWalking = 1000000;
+			// GetCharacterMovement()->GroundFriction = 10;
+			// GetCharacterMovement()->BrakingDecelerationWalking = 1000000;
 			break;
 		case EEnemyType::E_Ranged:
 			GetCharacterMovement()->MaxWalkSpeed = 400;

@@ -19,7 +19,26 @@
 AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UMyCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshAsset(TEXT("/Script/Engine.SkeletalMesh'/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple'"));
+	InitializeMesh();
+	InitializeWeapon();
+	InitializeAnimations();
+	InitializeInput();
+	InitializeMovement();
+	InitializeCamera();
+	InitializeProjectileSpawnPoint();
+
+	bReplicates = true;
+	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
+	GestureRecognizer = CreateDefaultSubobject<UMyGestureRecognizer>(TEXT("GestureRecognizer"));
+	GestureRecognizer->OnGestureRecognized.AddDynamic(this, &AMyProjectCharacter::HandleGesture);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	DoNothingDelegate.BindUObject(this, &AMyProjectCharacter::DoNothing);
+	ProjectileClass = AMageProjectile::StaticClass();
+}
+
+void AMyProjectCharacter::InitializeMesh()
+{
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshAsset(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
 	if (MeshAsset.Succeeded())
 	{
 		GetMesh()->SetSkeletalMesh(MeshAsset.Object);
@@ -28,101 +47,88 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 		GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		GetMesh()->SetCollisionResponseToAllChannels(ECR_Ignore);
 	}
+}
+
+void AMyProjectCharacter::InitializeWeapon()
+{
 	WeaponMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WeaponMesh"));
 	WeaponMesh->SetupAttachment(GetMesh(), TEXT("weapon_r"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> WeaponMeshAsset(TEXT("/Script/Engine.StaticMesh'/Game/Characters/Weapons/Staff/Staff.Staff'"));
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> WeaponMeshAsset(TEXT("/Game/Characters/Weapons/Staff/Staff.Staff"));
 	if (WeaponMeshAsset.Succeeded())
 	{
 		WeaponMesh->SetStaticMesh(WeaponMeshAsset.Object);
 		WeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		WeaponMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
 	}
-	static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBPClass(TEXT("/Script/Engine.AnimBlueprint'/Game/Characters/Mannequins/Animations/ABP.ABP_C'"));
+}
+
+void AMyProjectCharacter::InitializeAnimations()
+{
+	static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBPClass(TEXT("/Game/Characters/Mannequins/Animations/ABP.ABP_C"));
 	if (AnimBPClass.Succeeded())
 	{
 		GetMesh()->SetAnimInstanceClass(AnimBPClass.Class);
 	}
-	static ConstructorHelpers::FObjectFinder<UInputMappingContext> ContextFinder(TEXT("/Script/EnhancedInput.InputMappingContext'/Game/ThirdPerson/Input/IMC_Default.IMC_Default'"));
-	if (ContextFinder.Succeeded())
-	{
-		DefaultMappingContext = ContextFinder.Object;
-	}
-	static ConstructorHelpers::FObjectFinder<UInputAction> JumpInputActionAsset(TEXT("/Script/EnhancedInput.InputAction'/Game/ThirdPerson/Input/Actions/IA_Jump.IA_Jump'"));
-	if (JumpInputActionAsset.Succeeded())
-	{
-		JumpAction = JumpInputActionAsset.Object;
-	}
-	static ConstructorHelpers::FObjectFinder<UInputAction> RollInputActionAsset(TEXT("/Script/EnhancedInput.InputAction'/Game/ThirdPerson/Input/Actions/IA_Roll.IA_Roll'"));
-	if (RollInputActionAsset.Succeeded())
-	{
-		RollAction = RollInputActionAsset.Object;
-	}
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> DodgeMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Locomotion/Dodge/Dodge_Montage.Dodge_Montage'"));
-	if (DodgeMontageAsset.Succeeded())
-	{
-		DodgeMontage = DodgeMontageAsset.Object;
-	}
 
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartFMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_F_Montage.Start_F_Montage'"));
-	if (StartFMontageAsset.Succeeded())
-	{
-		StartFMontage = StartFMontageAsset.Object;
-	}
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> DodgeMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Locomotion/Dodge/Dodge_Montage.Dodge_Montage"));
+	if (DodgeMontageAsset.Succeeded()) DodgeMontage = DodgeMontageAsset.Object;
 
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartRMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_R_Montage.Start_R_Montage'"));
-	if (StartRMontageAsset.Succeeded())
-	{
-		StartRMontage = StartRMontageAsset.Object;
-	}
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartFMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_F_Montage.Start_F_Montage"));
+	if (StartFMontageAsset.Succeeded()) StartFMontage = StartFMontageAsset.Object;
 
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Attack/Attack_Montage.Attack_Montage'"));
-	if (AttackMontageAsset.Succeeded())
-	{
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartRMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_R_Montage.Start_R_Montage"));
+	if (StartRMontageAsset.Succeeded()) StartRMontage = StartRMontageAsset.Object;
 
-		FirstAttackMontage = AttackMontageAsset.Object;
-	}
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> SecondAttackMontageAsset(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Mannequins/Animations/Attack/Second_Attack_Montage.Second_Attack_Montage'"));
-	if (SecondAttackMontageAsset.Succeeded())
-	{
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Attack/Attack_Montage.Attack_Montage"));
+	if (AttackMontageAsset.Succeeded()) FirstAttackMontage = AttackMontageAsset.Object;
 
-		SecondAttackMontage = SecondAttackMontageAsset.Object;
-	}
-	ProjectileSpawnPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("ProjectileSpawnPoint"));
-	ProjectileSpawnPoint->SetupAttachment(RootComponent);
-	ProjectileSpawnPoint->SetRelativeLocation(FVector(100.0f, 0.0f, 50.0f));
-	ProjectileSpawnPoint->SetRelativeRotation(FRotator(0.0f, 0.0f, 0.0f));
-	ProjectileSpawnPoint->bHiddenInGame = false;
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> SecondAttackMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Attack/Second_Attack_Montage.Second_Attack_Montage"));
+	if (SecondAttackMontageAsset.Succeeded()) SecondAttackMontage = SecondAttackMontageAsset.Object;
+}
 
-	// Set size for collision capsule
+void AMyProjectCharacter::InitializeInput()
+{
+	static ConstructorHelpers::FObjectFinder<UInputMappingContext> ContextFinder(TEXT("/Game/ThirdPerson/Input/IMC_Default.IMC_Default"));
+	if (ContextFinder.Succeeded()) DefaultMappingContext = ContextFinder.Object;
+
+	static ConstructorHelpers::FObjectFinder<UInputAction> JumpInputActionAsset(TEXT("/Game/ThirdPerson/Input/Actions/IA_Jump.IA_Jump"));
+	if (JumpInputActionAsset.Succeeded()) JumpAction = JumpInputActionAsset.Object;
+
+	static ConstructorHelpers::FObjectFinder<UInputAction> RollInputActionAsset(TEXT("/Game/ThirdPerson/Input/Actions/IA_Roll.IA_Roll"));
+	if (RollInputActionAsset.Succeeded()) RollAction = RollInputActionAsset.Object;
+}
+
+void AMyProjectCharacter::InitializeMovement()
+{
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-
-	// Don't rotate when the controller rotates. Let that just affect the camera.
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
 
-	// Configure character movement
-	GetCharacterMovement()->bOrientRotationToMovement = true; // Character moves in the direction of input...
-	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = false;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 400.0f, 0.0f); // ...at this rotation rate
-	GetCharacterMovement()->JumpZVelocity = 700.f;
-	GetCharacterMovement()->AirControl = 0.35f;
-	GetCharacterMovement()->MaxWalkSpeed = 500.f;
-	GetCharacterMovement()->MinAnalogWalkSpeed = 20.f;
-	GetCharacterMovement()->GroundFriction = 0.1;
-	GetCharacterMovement()->BrakingDecelerationWalking = 1000;
-	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
-	GetCharacterMovement()->bUseFlatBaseForFloorChecks = true;
-	bUseControllerRotationYaw = false;
+	UCharacterMovementComponent* MoveComp = GetCharacterMovement();
+	MoveComp->bOrientRotationToMovement = true;
+	MoveComp->bAllowPhysicsRotationDuringAnimRootMotion = false;
+	MoveComp->RotationRate = FRotator(0.0f, 400.0f, 0.0f);
+	MoveComp->JumpZVelocity = 700.f;
+	MoveComp->AirControl = 0.35f;
+	MoveComp->MaxWalkSpeed = 500.f;
+	MoveComp->MinAnalogWalkSpeed = 20.f;
+	MoveComp->GroundFriction = 0.1;
+	MoveComp->BrakingDecelerationWalking = 1000;
+	MoveComp->BrakingDecelerationFalling = 1500.0f;
+	MoveComp->bUseFlatBaseForFloorChecks = true;
+}
 
+void AMyProjectCharacter::InitializeCamera()
+{
 	CameraRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CameraRoot"));
 	CameraRoot->SetupAttachment(RootComponent);
 	CameraRoot->SetUsingAbsoluteRotation(true);
 
-	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(CameraRoot);
-	CameraBoom->TargetArmLength = 900.0f; // The camera follows at this distance behind the character
+	CameraBoom->TargetArmLength = 900.0f;
 	CameraBoom->bDoCollisionTest = false;
 	CameraBoom->bUsePawnControlRotation = false;
 	CameraBoom->bInheritYaw = false;
@@ -132,19 +138,18 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	CameraBoom->bEnableCameraRotationLag = false;
 	CameraBoom->SetRelativeRotation(FRotator(-30.f, 0.f, 0.f));
 
-	// Create a follow camera
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
+}
 
-	DoNothingDelegate.BindUObject(this, &AMyProjectCharacter::DoNothing);
-
-	ProjectileClass = AMageProjectile::StaticClass();
-	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
-
-	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
-
-	bReplicates = true;
+void AMyProjectCharacter::InitializeProjectileSpawnPoint()
+{
+	ProjectileSpawnPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("ProjectileSpawnPoint"));
+	ProjectileSpawnPoint->SetupAttachment(RootComponent);
+	ProjectileSpawnPoint->SetRelativeLocation(FVector(100.0f, 0.0f, 50.0f));
+	ProjectileSpawnPoint->SetRelativeRotation(FRotator(0.0f, 0.0f, 0.0f));
+	ProjectileSpawnPoint->bHiddenInGame = false;
 }
 
 void AMyProjectCharacter::PossessAIController(UClass* _AIControllerClass)
@@ -334,102 +339,146 @@ void AMyProjectCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
 void AMyProjectCharacter::OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location)
 {
-	SwipeStartLocation = Location;
-	SwipePoints.Empty();
-	SwipePoints.Add(Location);
-	bIsSwipeInProgress = true;
+	// SwipeStartLocation = Location;
+	// SwipePoints.Empty();
+	// SwipePoints.Add(Location);
+	// bIsSwipeInProgress = true;
+	GestureRecognizer->StartGesture(Location);
 }
 
 void AMyProjectCharacter::OnSwipeUpdated(ETouchIndex::Type FingerIndex, FVector Location)
 {
-	if (bIsSwipeInProgress)
+	// if (bIsSwipeInProgress)
+	// {
+	// 	SwipePoints.Add(Location);
+	// }
+	GestureRecognizer->UpdateGesture(Location);
+}
+
+void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
+{
+	UE_LOG(LogTemp, Warning, TEXT("Gesture result as int: %d"), static_cast<int32>(Gesture));
+	switch (Gesture)
 	{
-		SwipePoints.Add(Location);
+		case EGestureType::SwipeDown:
+			if (HasAuthority()) {
+				MulticastStartDodge();
+			} else {
+				ServerStartDodge();
+			}
+			break;
+		case EGestureType::None:
+		{
+			std::random_device rd;
+			std::mt19937 gen(rd());
+			std::uniform_real_distribution<float> dis(-90.0, 90.0);
+			float randomFloat = dis(gen);
+			if (HasAuthority()) {
+				MulticastStartAttack(randomFloat);
+			} else {
+				ServerStartAttack(randomFloat);
+			}
+			break;
+		}
+		default:
+			break;
 	}
 }
 
 void AMyProjectCharacter::OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Location)
 {
-	if (bIsSwipeInProgress)
+	// if (bIsSwipeInProgress)
+	// {
+	// 	SwipePoints.Add(Location);
+
+	// 	EGestureType DetectedGesture = GestureRecognizer.RecognizeGesture(SwipePoints);
+
+	// 	switch (DetectedGesture)
+	// 	{
+	// 		case EGestureType::SwipeRight:
+	// 			break;
+	// 		case EGestureType::SwipeLeft:
+	// 			break;
+	// 		case EGestureType::SwipeUp:
+	// 			break;
+	// 		case EGestureType::SwipeDown:
+	// 			if (HasAuthority()) {
+	// 				MulticastStartDodge();
+	// 			}
+	// 			else
+	// 			{
+	// 				ServerStartDodge();
+	// 			}
+	// 			break;
+	// 		case EGestureType::Circle:
+	// 			break;
+	// 		case EGestureType::None:
+	// 			/*std::random_device					  rd;
+	// 			std::mt19937						  gen(rd());
+	// 			std::uniform_real_distribution<float> dis(-90.0, 90.0);
+	// 			float								  randomFloat = dis(gen);
+
+	// 			SmoothlyRotate(randomFloat, 1);
+	// 			StartAttack();*/
+	// 			std::random_device					  rd;
+	// 			std::mt19937						  gen(rd());
+	// 			std::uniform_real_distribution<float> dis(-90.0, 90.0);
+	// 			float								  randomFloat = dis(gen);
+	// 			if (HasAuthority())
+	// 			{
+	// 				MulticastStartAttack(randomFloat);
+	// 			}
+	// 			else
+	// 			{
+	// 				ServerStartAttack(randomFloat);
+	// 			}
+	// 			break;
+	// 	}
+
+	// 	bIsSwipeInProgress = false;
+	// }
+	GestureRecognizer->EndGesture(Location);
+}
+
+void AMyProjectCharacter::PlayMontage(UAnimMontage* Montage, FOnMontageEnded EndDelegate)
+{
+	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
+	if (AnimInstance && Montage)
 	{
-		SwipePoints.Add(Location);
-
-		EGestureType DetectedGesture = Recognizer.RecognizeGesture(SwipePoints);
-
-		switch (DetectedGesture)
-		{
-			case EGestureType::SwipeRight:
-				break;
-			case EGestureType::SwipeLeft:
-				break;
-			case EGestureType::SwipeUp:
-				break;
-			case EGestureType::SwipeDown:
-				if (HasAuthority()) {
-					MulticastStartDodge();
-				}
-				else
-				{
-					ServerStartDodge();
-				}
-				break;
-			case EGestureType::Circle:
-				break;
-			case EGestureType::None:
-				/*std::random_device					  rd;
-				std::mt19937						  gen(rd());
-				std::uniform_real_distribution<float> dis(-90.0, 90.0);
-				float								  randomFloat = dis(gen);
-
-				SmoothlyRotate(randomFloat, 1);
-				StartAttack();*/
-				std::random_device					  rd;
-				std::mt19937						  gen(rd());
-				std::uniform_real_distribution<float> dis(-90.0, 90.0);
-				float								  randomFloat = dis(gen);
-				if (HasAuthority())
-				{
-					MulticastStartAttack(randomFloat);
-				}
-				else
-				{
-					ServerStartAttack(randomFloat);
-				}
-				break;
-		}
-
-		bIsSwipeInProgress = false;
+		AnimInstance->Montage_Play(Montage);
+		AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
 	}
 }
 
 void AMyProjectCharacter::StartAttack()
 {
 	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-	if (AnimInstance && AnimInstance->Montage_IsPlaying(DodgeMontage))
+	if (!AnimInstance) return;
+
+	if (AnimInstance->Montage_IsPlaying(DodgeMontage))
 	{
 		FVector Direction = GetActorForwardVector();
 		FVector NewVelocity = Direction * 800.f;
 		GetCharacterMovement()->Velocity = NewVelocity;  
 	}
+
 	SwitchToWalking();
+
+	FinishAttackDelegate.Unbind();
+
 	if (IsSecondAttackWindowOpen)
 	{
-		AnimInstance->Montage_SetEndDelegate(DoNothingDelegate, FirstAttackMontage);
-		AnimInstance->Montage_SetEndDelegate(DoNothingDelegate, SecondAttackMontage);
-		FinishAttackDelegate.Unbind();
-		AnimInstance->Montage_Play(SecondAttackMontage);
+		IsAttacking = true;
 		FinishAttackDelegate.BindUObject(this, &AMyProjectCharacter::FinishAttack);
-		AnimInstance->Montage_SetEndDelegate(FinishAttackDelegate, SecondAttackMontage);
+		PlayMontage(SecondAttackMontage, FinishAttackDelegate);
+		return;
 	}
+
 	if (!IsAttacking || IsAttackEnding)
 	{
-		AnimInstance->Montage_SetEndDelegate(DoNothingDelegate, FirstAttackMontage);
-		AnimInstance->Montage_SetEndDelegate(DoNothingDelegate, SecondAttackMontage);
-		FinishAttackDelegate.Unbind();
 		IsAttacking = true;
-		AnimInstance->Montage_Play(FirstAttackMontage);
 		FinishAttackDelegate.BindUObject(this, &AMyProjectCharacter::FinishAttack);
-		AnimInstance->Montage_SetEndDelegate(FinishAttackDelegate, FirstAttackMontage);
+		PlayMontage(FirstAttackMontage, FinishAttackDelegate);
 	}
 }
 
@@ -505,24 +554,22 @@ void AMyProjectCharacter::DoNothing(UAnimMontage* Montage, bool bInterrupted)
 
 void AMyProjectCharacter::StartDodge()
 {
-	if (!IsDodging)
-	{
-		SwitchToRunning();
-		GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;
-		IsDodging = true;
-		UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-		AnimInstance->Montage_Play(DodgeMontage);
-		FOnMontageEnded BlendingOutDelegate;
-		BlendingOutDelegate.BindUObject(this, &AMyProjectCharacter::FinishDodge);
-		AnimInstance->Montage_SetBlendingOutDelegate(BlendingOutDelegate, DodgeMontage);
-	}
-	/*UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-	AnimInstance->Montage_Play(StartFMontage);
-	AnimInstance->Montage_Play(StartRMontage);*/
+	if (IsDodging) return;
+
+	SwitchToRunning();
+	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;
+	IsDodging = true;
+
+	FOnMontageEnded BlendingOutDelegate;
+	BlendingOutDelegate.BindUObject(this, &AMyProjectCharacter::FinishDodge);
+	PlayMontage(DodgeMontage, BlendingOutDelegate);
 }
 
 void AMyProjectCharacter::FinishDodge(UAnimMontage* Montage, bool bInterrupted)
 {
 	IsDodging = false;
 	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = false;
+	FVector Direction = GetActorForwardVector();
+	FVector NewVelocity = Direction * 800.f;
+	GetCharacterMovement()->Velocity = NewVelocity;  
 }
