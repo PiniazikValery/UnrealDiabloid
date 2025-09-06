@@ -10,6 +10,12 @@ AAEnemySpawner::AAEnemySpawner()
 {
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = false;
+
+	// Safe place to assign default class (after vtables are initialized)
+	if (!EnemyClass)
+	{
+		EnemyClass = AEnemyCharacter::StaticClass();
+	}
 }
 
 // Called when the game starts or when spawned

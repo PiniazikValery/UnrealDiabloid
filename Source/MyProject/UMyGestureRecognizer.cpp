@@ -7,15 +7,12 @@ UMyGestureRecognizer::UMyGestureRecognizer()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
-UMyGestureRecognizer::~UMyGestureRecognizer()
-{
-}
 
 void UMyGestureRecognizer::StartGesture(const FVector& Start)
 {
 	StartLocation = Start;
-	Points.Empty();
-	Points.Add(Start);
+	LocalPoints.Empty();
+	LocalPoints.Add(Start);
 	bGestureActive = true;
 }
 
@@ -23,7 +20,7 @@ void UMyGestureRecognizer::UpdateGesture(const FVector& Point)
 {
 	if (bGestureActive)
 	{
-		Points.Add(Point);
+		LocalPoints.Add(Point);
 	}
 }
 
@@ -31,20 +28,20 @@ void UMyGestureRecognizer::EndGesture(const FVector& End)
 {
 	if (!bGestureActive) return;
 
-	Points.Add(End);
+	LocalPoints.Add(End);
 	bGestureActive = false;
 
-	EGestureType Result = RecognizeGesture(Points);
+	EGestureType Result = RecognizeGesture(LocalPoints);
 	OnGestureRecognized.Broadcast(Result);
 }
 
-EGestureType UMyGestureRecognizer::RecognizeGesture(const TArray<FVector>& Points)
+EGestureType UMyGestureRecognizer::RecognizeGesture(const TArray<FVector>& InPoints)
 {
-	if (Points.Num() < 2)
+	if (InPoints.Num() < 2)
 		return EGestureType::None;
 
-	FVector StartPoint = Points[0];
-	FVector EndPoint = Points.Last();
+	FVector StartPoint = InPoints[0];
+	FVector EndPoint = InPoints.Last();
 
 	// Calculate overall direction and distance
 	FVector Direction = EndPoint - StartPoint;
@@ -67,7 +64,7 @@ EGestureType UMyGestureRecognizer::RecognizeGesture(const TArray<FVector>& Point
 	}
 
 	// Check for circle gesture
-	if (IsCircleGesture(Points))
+	if (IsCircleGesture(InPoints))
 	{
 		return EGestureType::Circle;
 	}
@@ -75,46 +72,46 @@ EGestureType UMyGestureRecognizer::RecognizeGesture(const TArray<FVector>& Point
 	return EGestureType::None;
 }
 
-bool UMyGestureRecognizer::IsCircleGesture(const TArray<FVector>& Points)
+bool UMyGestureRecognizer::IsCircleGesture(const TArray<FVector>& InPoints)
 {
-	if (Points.Num() < 10)
+	if (InPoints.Num() < 10)
 		return false;
 
-	FVector Center = CalculateCenter(Points);
-	float	AverageRadius = CalculateAverageRadius(Points, Center);
-	float	RadiusVariance = CalculateRadiusVariance(Points, Center, AverageRadius);
+	FVector Center = CalculateCenter(InPoints);
+	float	AverageRadius = CalculateAverageRadius(InPoints, Center);
+	float	RadiusVariance = CalculateRadiusVariance(InPoints, Center, AverageRadius);
 
 	// Check if the points form a relatively circular shape
 	return RadiusVariance < 0.2f * AverageRadius;
 }
 
-FVector UMyGestureRecognizer::CalculateCenter(const TArray<FVector>& Points)
+FVector UMyGestureRecognizer::CalculateCenter(const TArray<FVector>& InPoints)
 {
 	FVector Sum(0, 0, 0);
-	for (const FVector& Point : Points)
+	for (const FVector& Point : InPoints)
 	{
 		Sum += Point;
 	}
-	return Sum / Points.Num();
+	return Sum / InPoints.Num();
 }
 
-float UMyGestureRecognizer::CalculateAverageRadius(const TArray<FVector>& Points, const FVector& Center)
+float UMyGestureRecognizer::CalculateAverageRadius(const TArray<FVector>& InPoints, const FVector& Center)
 {
 	float Sum = 0;
-	for (const FVector& Point : Points)
+	for (const FVector& Point : InPoints)
 	{
 		Sum += FVector::Dist(Point, Center);
 	}
-	return Sum / Points.Num();
+	return Sum / InPoints.Num();
 }
 
-float UMyGestureRecognizer::CalculateRadiusVariance(const TArray<FVector>& Points, const FVector& Center, float AverageRadius)
+float UMyGestureRecognizer::CalculateRadiusVariance(const TArray<FVector>& InPoints, const FVector& Center, float AverageRadius)
 {
 	float Sum = 0;
-	for (const FVector& Point : Points)
+	for (const FVector& Point : InPoints)
 	{
 		float Diff = FVector::Dist(Point, Center) - AverageRadius;
 		Sum += Diff * Diff;
 	}
-	return FMath::Sqrt(Sum / Points.Num());
+	return FMath::Sqrt(Sum / InPoints.Num());
 }

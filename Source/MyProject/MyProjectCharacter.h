@@ -7,7 +7,6 @@
 //#include <numbers>
 #include "CoreMinimal.h"
 #include "Animation/AnimMontage.h"
-#include "UMyGestureRecognizer.h"
 #include "Enums/GestureType.h"
 #include "Components/ArrowComponent.h"
 #include "GameFramework/Character.h"
@@ -16,6 +15,7 @@
 #include "./MyCharacterMovementComponent.h"
 #include "./Character/CharacterInput.h"
 #include "AIController.h"
+#include "Character/CombatComponent.h"
 #include "MyProjectCharacter.generated.h"
 
 class USpringArmComponent;
@@ -23,6 +23,7 @@ class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
 struct FInputActionValue;
+class UMyGestureRecognizer; // Forward declaration
 
 UENUM(BlueprintType)
 enum class EEnemyType : uint8
@@ -151,6 +152,8 @@ public:
 	void SetIsAttackEnding(bool value);
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	void SetIsSecondAttackWindowOpen(bool value);
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerSetSecondAttackWindow(bool bOpen);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCharacterInput* InputHandler;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
@@ -160,12 +163,9 @@ public:
 private:
 	/*float				PreviousSpeed;*/
 	bool				withoutRootStart = false;
-	bool				IsDodging = false;
-	bool				IsAttacking = false;
 	TArray<FVector>		SwipePoints;
 	bool				bIsSwipeInProgress;
 	FVector				SwipeStartLocation;
-	// MyGestureRecognizer* GestureRecognizer;
 	FVector2D			MovementVector;
 	float				StartRollYaw;
 	float				RollMovementRotation = 0.f;
@@ -175,12 +175,8 @@ private:
 	float				SmoothRotationSpeed = 1;
 	float				SmoothRotationElapsedTime = 0.f;
 	FOnMontageEnded		DoNothingDelegate;
-	FOnMontageEnded		FinishAttackDelegate;
 	float				previusVelocity = 0;
 	UInputComponent*	_PlayerInputComponent;
-	// Attack animation
-	bool IsAttackEnding = false;
-	bool IsSecondAttackWindowOpen = false;
    	void InitializeMesh();
 	void InitializeWeapon();
 	void InitializeAnimations();
@@ -191,4 +187,14 @@ private:
 	void PlayMontage(UAnimMontage* Montage, FOnMontageEnded EndDelegate);
 	UFUNCTION()
 	void HandleGesture(EGestureType Gesture);
+
+public:
+	FORCEINLINE UAnimMontage* GetDodgeMontage() const { return DodgeMontage; }
+	FORCEINLINE UAnimMontage* GetFirstAttackMontage() const { return FirstAttackMontage; }
+	FORCEINLINE UAnimMontage* GetSecondAttackMontage() const { return SecondAttackMontage; }
+	FORCEINLINE UCombatComponent* GetCombatComponent() const { return CombatComponent; }
+
+private:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
+	UCombatComponent* CombatComponent;
 };

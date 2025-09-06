@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MyProjectCharacter.h"
+#include "UMyGestureRecognizer.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -12,9 +13,6 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
-
-//////////////////////////////////////////////////////////////////////////
-// AMyProjectCharacter
 
 AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UMyCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -30,6 +28,7 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	bReplicates = true;
 	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
 	GestureRecognizer = CreateDefaultSubobject<UMyGestureRecognizer>(TEXT("GestureRecognizer"));
+	CombatComponent = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
 	GestureRecognizer->OnGestureRecognized.AddDynamic(this, &AMyProjectCharacter::HandleGesture);
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 	DoNothingDelegate.BindUObject(this, &AMyProjectCharacter::DoNothing);
@@ -231,37 +230,27 @@ float AMyProjectCharacter::GetInputDirection() const
 	return InputAngle;
 }
 
-bool AMyProjectCharacter::GetIsDodging() const
-{
-	return IsDodging;
-}
+bool AMyProjectCharacter::GetIsDodging() const { return CombatComponent ? CombatComponent->GetIsDodging() : false; }
+bool AMyProjectCharacter::GetIsAttacking() const { return CombatComponent ? CombatComponent->GetIsAttacking() : false; }
 
-bool AMyProjectCharacter::GetIsAttacking() const
-{
-	return IsAttacking;
-}
-
-void AMyProjectCharacter::SetIsInRollAnimation(bool value)
-{
-	if (IsDodging != value)
-	{
-		IsDodging = value;
-	}
-}
+void AMyProjectCharacter::SetIsInRollAnimation(bool value) { /* maintained for BP compatibility */ }
 
 float AMyProjectCharacter::GetLookRotation()
 {
 	return CurrentHorizontalSmoothRotationOffset;
 }
 
-void AMyProjectCharacter::SetIsAttackEnding(bool value)
-{
-	IsAttackEnding = value;
-}
-
+void AMyProjectCharacter::SetIsAttackEnding(bool value) { if (CombatComponent) CombatComponent->SetIsAttackEnding(value); }
 void AMyProjectCharacter::SetIsSecondAttackWindowOpen(bool value)
 {
-	IsSecondAttackWindowOpen = value;
+	if (HasAuthority())
+	{
+		if (CombatComponent) CombatComponent->SetIsSecondAttackWindowOpen(value);
+	}
+	else
+	{
+		ServerSetSecondAttackWindow(value);
+	}
 }
 
 void AMyProjectCharacter::FireProjectile()
@@ -339,25 +328,16 @@ void AMyProjectCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
 void AMyProjectCharacter::OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location)
 {
-	// SwipeStartLocation = Location;
-	// SwipePoints.Empty();
-	// SwipePoints.Add(Location);
-	// bIsSwipeInProgress = true;
 	GestureRecognizer->StartGesture(Location);
 }
 
 void AMyProjectCharacter::OnSwipeUpdated(ETouchIndex::Type FingerIndex, FVector Location)
 {
-	// if (bIsSwipeInProgress)
-	// {
-	// 	SwipePoints.Add(Location);
-	// }
 	GestureRecognizer->UpdateGesture(Location);
 }
 
 void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 {
-	UE_LOG(LogTemp, Warning, TEXT("Gesture result as int: %d"), static_cast<int32>(Gesture));
 	switch (Gesture)
 	{
 		case EGestureType::SwipeDown:
@@ -387,56 +367,6 @@ void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 
 void AMyProjectCharacter::OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Location)
 {
-	// if (bIsSwipeInProgress)
-	// {
-	// 	SwipePoints.Add(Location);
-
-	// 	EGestureType DetectedGesture = GestureRecognizer.RecognizeGesture(SwipePoints);
-
-	// 	switch (DetectedGesture)
-	// 	{
-	// 		case EGestureType::SwipeRight:
-	// 			break;
-	// 		case EGestureType::SwipeLeft:
-	// 			break;
-	// 		case EGestureType::SwipeUp:
-	// 			break;
-	// 		case EGestureType::SwipeDown:
-	// 			if (HasAuthority()) {
-	// 				MulticastStartDodge();
-	// 			}
-	// 			else
-	// 			{
-	// 				ServerStartDodge();
-	// 			}
-	// 			break;
-	// 		case EGestureType::Circle:
-	// 			break;
-	// 		case EGestureType::None:
-	// 			/*std::random_device					  rd;
-	// 			std::mt19937						  gen(rd());
-	// 			std::uniform_real_distribution<float> dis(-90.0, 90.0);
-	// 			float								  randomFloat = dis(gen);
-
-	// 			SmoothlyRotate(randomFloat, 1);
-	// 			StartAttack();*/
-	// 			std::random_device					  rd;
-	// 			std::mt19937						  gen(rd());
-	// 			std::uniform_real_distribution<float> dis(-90.0, 90.0);
-	// 			float								  randomFloat = dis(gen);
-	// 			if (HasAuthority())
-	// 			{
-	// 				MulticastStartAttack(randomFloat);
-	// 			}
-	// 			else
-	// 			{
-	// 				ServerStartAttack(randomFloat);
-	// 			}
-	// 			break;
-	// 	}
-
-	// 	bIsSwipeInProgress = false;
-	// }
 	GestureRecognizer->EndGesture(Location);
 }
 
@@ -450,46 +380,8 @@ void AMyProjectCharacter::PlayMontage(UAnimMontage* Montage, FOnMontageEnded End
 	}
 }
 
-void AMyProjectCharacter::StartAttack()
-{
-	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-	if (!AnimInstance) return;
-
-	if (AnimInstance->Montage_IsPlaying(DodgeMontage))
-	{
-		FVector Direction = GetActorForwardVector();
-		FVector NewVelocity = Direction * 800.f;
-		GetCharacterMovement()->Velocity = NewVelocity;  
-	}
-
-	SwitchToWalking();
-
-	FinishAttackDelegate.Unbind();
-
-	if (IsSecondAttackWindowOpen)
-	{
-		IsAttacking = true;
-		FinishAttackDelegate.BindUObject(this, &AMyProjectCharacter::FinishAttack);
-		PlayMontage(SecondAttackMontage, FinishAttackDelegate);
-		return;
-	}
-
-	if (!IsAttacking || IsAttackEnding)
-	{
-		IsAttacking = true;
-		FinishAttackDelegate.BindUObject(this, &AMyProjectCharacter::FinishAttack);
-		PlayMontage(FirstAttackMontage, FinishAttackDelegate);
-	}
-}
-
-void AMyProjectCharacter::FinishAttack(UAnimMontage* Montage, bool bInterrupted)
-{
-	IsAttacking = false;
-	if (!bInterrupted)
-	{
-		SwitchToRunning();
-	}
-}
+void AMyProjectCharacter::StartAttack() { if (CombatComponent) CombatComponent->StartAttack(); }
+void AMyProjectCharacter::FinishAttack(UAnimMontage* Montage, bool bInterrupted) { /* now handled by component */ }
 
 void AMyProjectCharacter::SwitchToWalking()
 {
@@ -517,20 +409,14 @@ bool AMyProjectCharacter::ServerSetIsPlayerTryingToMove_Validate(bool NewIsPlaye
 	return true;
 }
 
-void AMyProjectCharacter::ServerStartDodge_Implementation()
-{
-	MulticastStartDodge();
-}
+void AMyProjectCharacter::ServerStartDodge_Implementation() { MulticastStartDodge(); }
 
 bool AMyProjectCharacter::ServerStartDodge_Validate()
 {
 	return true;
 }
 
-void AMyProjectCharacter::MulticastStartDodge_Implementation()
-{
-	StartDodge();
-}
+void AMyProjectCharacter::MulticastStartDodge_Implementation() { StartDodge(); }
 
 void AMyProjectCharacter::ServerStartAttack_Implementation(float angle)
 {
@@ -542,34 +428,21 @@ bool AMyProjectCharacter::ServerStartAttack_Validate(float angle)
 	return true;
 }
 
-void AMyProjectCharacter::MulticastStartAttack_Implementation(float angle)
-{
-	SmoothlyRotate(angle, 1);
-	StartAttack();
-}
+void AMyProjectCharacter::MulticastStartAttack_Implementation(float angle) { SmoothlyRotate(angle, 1); StartAttack(); }
 
 void AMyProjectCharacter::DoNothing(UAnimMontage* Montage, bool bInterrupted)
 {
 }
 
-void AMyProjectCharacter::StartDodge()
+void AMyProjectCharacter::StartDodge() { if (CombatComponent) CombatComponent->StartDodge(); }
+void AMyProjectCharacter::FinishDodge(UAnimMontage* Montage, bool bInterrupted) { /* handled by component */ }
+
+void AMyProjectCharacter::ServerSetSecondAttackWindow_Implementation(bool bOpen)
 {
-	if (IsDodging) return;
-
-	SwitchToRunning();
-	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = true;
-	IsDodging = true;
-
-	FOnMontageEnded BlendingOutDelegate;
-	BlendingOutDelegate.BindUObject(this, &AMyProjectCharacter::FinishDodge);
-	PlayMontage(DodgeMontage, BlendingOutDelegate);
+	if (CombatComponent) CombatComponent->SetIsSecondAttackWindowOpen(bOpen);
 }
 
-void AMyProjectCharacter::FinishDodge(UAnimMontage* Montage, bool bInterrupted)
+bool AMyProjectCharacter::ServerSetSecondAttackWindow_Validate(bool bOpen)
 {
-	IsDodging = false;
-	GetCharacterMovement()->bAllowPhysicsRotationDuringAnimRootMotion = false;
-	FVector Direction = GetActorForwardVector();
-	FVector NewVelocity = Direction * 800.f;
-	GetCharacterMovement()->Velocity = NewVelocity;  
+	return true;
 }

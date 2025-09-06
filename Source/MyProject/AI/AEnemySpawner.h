@@ -33,7 +33,7 @@ protected:
 	float SpawnInterval = 2.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Spawning")
-	TSubclassOf<AMyProjectCharacter> EnemyClass = AEnemyCharacter::StaticClass();
+	TSubclassOf<AMyProjectCharacter> EnemyClass;
 
 	FTimerHandle SpawnTimerHandle;
 

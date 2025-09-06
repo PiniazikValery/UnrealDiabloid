@@ -1,8 +1,9 @@
-/Saved
-/obj
-/Content
-/MyProject (Mac).xcworkspace
-/DerivedDataCache
 /.git
+/.vs
 /.vscode
+/Content
+/DerivedDataCache
 /Intermediate
+/MyProject (Mac).xcworkspace
+/obj
+/Saved

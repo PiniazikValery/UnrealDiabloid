@@ -24,5 +24,6 @@ protected:
 public:
 	// Класс снаряда, который нужно прогреть
 	UPROPERTY(EditAnywhere, Category = "Warmup")
-	TSubclassOf<AMageProjectile> ProjectileClassToWarmup = AMageProjectile::StaticClass();
+	// Set in constructor instead of here to avoid early static initialization issues.
+	TSubclassOf<AMageProjectile> ProjectileClassToWarmup;
 };

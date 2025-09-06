@@ -10,6 +10,10 @@
 AWarmupManager::AWarmupManager()
 {
 	PrimaryActorTick.bCanEverTick = false; // Tick не нужен
+	if (!ProjectileClassToWarmup)
+	{
+		ProjectileClassToWarmup = AMageProjectile::StaticClass();
+	}
 }
 
 void AWarmupManager::BeginPlay()
