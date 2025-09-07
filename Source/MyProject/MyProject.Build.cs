@@ -11,11 +11,10 @@ public class MyProject : ModuleRules
     PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Niagara", "NavigationSystem", "AIModule", "ProceduralMeshComponent", "GameplayTasks", "UMG", "Slate", "SlateCore", "NetCore", "Networking" });
 
         // Add public include paths for easier header inclusion (e.g., Character/CombatComponent.h)
+        // Add module root so includes can use "Folder/Header.h" (e.g., "Projectiles/MageProjectile.h").
         PublicIncludePaths.AddRange(new string[]
         {
-            System.IO.Path.Combine(ModuleDirectory, "Character"),
-            System.IO.Path.Combine(ModuleDirectory, "Enums"),
-            System.IO.Path.Combine(ModuleDirectory, "Projectiles")
+            ModuleDirectory
         });
     }
 }

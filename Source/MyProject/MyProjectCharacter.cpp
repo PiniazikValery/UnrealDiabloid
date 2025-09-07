@@ -13,6 +13,11 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
+#include <random>
+#include <cmath>
+#include "AIController.h"
+#include "Components/RotationSmoothingComponent.h"
+#include "Components/ProjectileSpawnerComponent.h"
 
 AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UMyCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -23,15 +28,20 @@ AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitial
 	InitializeInput();
 	InitializeMovement();
 	InitializeCamera();
-	InitializeProjectileSpawnPoint();
+	InitializeProjectileSpawnPoint(); // kept for backward compatibility (spawner component also creates one)
 
 	bReplicates = true;
 	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
 	GestureRecognizer = CreateDefaultSubobject<UMyGestureRecognizer>(TEXT("GestureRecognizer"));
 	CombatComponent = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
+	RotationSmoothingComponent = CreateDefaultSubobject<URotationSmoothingComponent>(TEXT("RotationSmoothingComponent"));
+	ProjectileSpawnerComponent = CreateDefaultSubobject<UProjectileSpawnerComponent>(TEXT("ProjectileSpawnerComponent"));
+	if (RotationSmoothingComponent && ProjectileSpawnerComponent)
+	{
+		RotationSmoothingComponent->OnRotationOffsetChanged.AddDynamic(this, &AMyProjectCharacter::HandleRotationOffsetChanged);
+	}
 	GestureRecognizer->OnGestureRecognized.AddDynamic(this, &AMyProjectCharacter::HandleGesture);
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
-	DoNothingDelegate.BindUObject(this, &AMyProjectCharacter::DoNothing);
 	ProjectileClass = AMageProjectile::StaticClass();
 }
 
@@ -198,10 +208,10 @@ void AMyProjectCharacter::SetRotationRate(FRotator rotation)
 
 void AMyProjectCharacter::SmoothlyRotate(float degrees, float speed)
 {
-	SmoothRotationSpeed = speed;
-	EndHorizontalSmoothRotationOffset = degrees;
-	StartHorizontalSmoothRotationOffset = CurrentHorizontalSmoothRotationOffset;
-	SmoothRotationElapsedTime = 0.f;
+	if (RotationSmoothingComponent)
+	{
+		RotationSmoothingComponent->SmoothlyRotate(degrees, speed);
+	}
 }
 
 bool AMyProjectCharacter::GetWithoutRootStart()
@@ -237,7 +247,7 @@ void AMyProjectCharacter::SetIsInRollAnimation(bool value) { /* maintained for B
 
 float AMyProjectCharacter::GetLookRotation()
 {
-	return CurrentHorizontalSmoothRotationOffset;
+	return RotationSmoothingComponent ? RotationSmoothingComponent->GetCurrentOffset() : 0.f;
 }
 
 void AMyProjectCharacter::SetIsAttackEnding(bool value) { if (CombatComponent) CombatComponent->SetIsAttackEnding(value); }
@@ -255,22 +265,9 @@ void AMyProjectCharacter::SetIsSecondAttackWindowOpen(bool value)
 
 void AMyProjectCharacter::FireProjectile()
 {
-	if (ProjectileClass)
+	if (ProjectileSpawnerComponent && ProjectileClass)
 	{
-		FVector	 SpawnLocation = ProjectileSpawnPoint->GetComponentLocation();
-		FRotator SpawnRotation = ProjectileSpawnPoint->GetComponentRotation();
-
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Owner = this;
-		SpawnParams.Instigator = GetInstigator();
-
-		AMageProjectile* Projectile = GetWorld()->SpawnActor<AMageProjectile>(ProjectileClass, SpawnLocation, SpawnRotation, SpawnParams);
-
-		if (Projectile)
-		{
-			FVector LaunchDirection = SpawnRotation.Vector();
-			Projectile->ProjectileMovement->Velocity = LaunchDirection * Projectile->ProjectileMovement->InitialSpeed;
-		}
+		ProjectileSpawnerComponent->SpawnProjectile(ProjectileClass, this);
 	}
 }
 
@@ -298,18 +295,7 @@ void AMyProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 
 void AMyProjectCharacter::Tick(float DeltaTime)
 {
-	if (CurrentHorizontalSmoothRotationOffset != EndHorizontalSmoothRotationOffset)
-	{
-		SmoothRotationElapsedTime += DeltaTime * SmoothRotationSpeed;
-		float Alpha = FMath::Clamp(SmoothRotationElapsedTime, 0.0f, 1.0f);
-		CurrentHorizontalSmoothRotationOffset = FMath::Lerp(StartHorizontalSmoothRotationOffset, EndHorizontalSmoothRotationOffset, Alpha);
-		ProjectileSpawnPoint->SetRelativeRotation(FRotator(0.0f, -CurrentHorizontalSmoothRotationOffset, 0.0f));
-		float CurrentHorizontalSmoothRotationOffsetRad = ((CurrentHorizontalSmoothRotationOffset + 90) * 3.14) / 180;
-		ProjectileSpawnPoint->SetRelativeLocation(FVector(100 * std::sin(CurrentHorizontalSmoothRotationOffsetRad), 100 * std::cos(CurrentHorizontalSmoothRotationOffsetRad), 50.0f));
-	}
-
-	float Velocity = GetCharacterMovement()->Velocity.Size();
-	previusVelocity = Velocity;
+	// No smoothing logic here; handled inside RotationSmoothingComponent.
 }
 
 void AMyProjectCharacter::BeginPlay()
@@ -338,30 +324,15 @@ void AMyProjectCharacter::OnSwipeUpdated(ETouchIndex::Type FingerIndex, FVector 
 
 void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 {
-	switch (Gesture)
+	if (Gesture == EGestureType::SwipeDown)
 	{
-		case EGestureType::SwipeDown:
-			if (HasAuthority()) {
-				MulticastStartDodge();
-			} else {
-				ServerStartDodge();
-			}
-			break;
-		case EGestureType::None:
-		{
-			std::random_device rd;
-			std::mt19937 gen(rd());
-			std::uniform_real_distribution<float> dis(-90.0, 90.0);
-			float randomFloat = dis(gen);
-			if (HasAuthority()) {
-				MulticastStartAttack(randomFloat);
-			} else {
-				ServerStartAttack(randomFloat);
-			}
-			break;
-		}
-		default:
-			break;
+		if (HasAuthority()) MulticastStartDodge(); else ServerStartDodge();
+	}
+	else if (Gesture == EGestureType::None)
+	{
+		std::random_device rd; std::mt19937 gen(rd()); std::uniform_real_distribution<float> dis(-90.f, 90.f);
+		const float Angle = dis(gen);
+		if (HasAuthority()) MulticastStartAttack(Angle); else ServerStartAttack(Angle);
 	}
 }
 
@@ -370,18 +341,7 @@ void AMyProjectCharacter::OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Lo
 	GestureRecognizer->EndGesture(Location);
 }
 
-void AMyProjectCharacter::PlayMontage(UAnimMontage* Montage, FOnMontageEnded EndDelegate)
-{
-	UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance();
-	if (AnimInstance && Montage)
-	{
-		AnimInstance->Montage_Play(Montage);
-		AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
-	}
-}
-
-void AMyProjectCharacter::StartAttack() { if (CombatComponent) CombatComponent->StartAttack(); }
-void AMyProjectCharacter::FinishAttack(UAnimMontage* Montage, bool bInterrupted) { /* now handled by component */ }
+// Attack & dodge triggered directly through CombatComponent (wrappers removed).
 
 void AMyProjectCharacter::SwitchToWalking()
 {
@@ -416,7 +376,7 @@ bool AMyProjectCharacter::ServerStartDodge_Validate()
 	return true;
 }
 
-void AMyProjectCharacter::MulticastStartDodge_Implementation() { StartDodge(); }
+void AMyProjectCharacter::MulticastStartDodge_Implementation() { if (CombatComponent) CombatComponent->StartDodge(); }
 
 void AMyProjectCharacter::ServerStartAttack_Implementation(float angle)
 {
@@ -428,14 +388,24 @@ bool AMyProjectCharacter::ServerStartAttack_Validate(float angle)
 	return true;
 }
 
-void AMyProjectCharacter::MulticastStartAttack_Implementation(float angle) { SmoothlyRotate(angle, 1); StartAttack(); }
+void AMyProjectCharacter::MulticastStartAttack_Implementation(float angle) { SmoothlyRotate(angle, 1); if (CombatComponent) CombatComponent->StartAttack(); }
 
-void AMyProjectCharacter::DoNothing(UAnimMontage* Montage, bool bInterrupted)
+// StartDodge wrapper removed.
+// Callback when rotation offset changes
+void AMyProjectCharacter::HandleRotationOffsetChanged(float NewOffset)
 {
+	if (ProjectileSpawnerComponent)
+	{
+		ProjectileSpawnerComponent->UpdateFromRotationOffset(NewOffset);
+	}
+	// Keep legacy arrow (if exists) in sync
+	if (ProjectileSpawnPoint)
+	{
+		const float Rad = FMath::DegreesToRadians(NewOffset + 90.f);
+		ProjectileSpawnPoint->SetRelativeRotation(FRotator(0.f, -NewOffset, 0.f));
+		ProjectileSpawnPoint->SetRelativeLocation(FVector(100.f * FMath::Sin(Rad), 100.f * FMath::Cos(Rad), 50.f));
+	}
 }
-
-void AMyProjectCharacter::StartDodge() { if (CombatComponent) CombatComponent->StartDodge(); }
-void AMyProjectCharacter::FinishDodge(UAnimMontage* Montage, bool bInterrupted) { /* handled by component */ }
 
 void AMyProjectCharacter::ServerSetSecondAttackWindow_Implementation(bool bOpen)
 {

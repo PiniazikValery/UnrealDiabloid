@@ -2,19 +2,14 @@
 
 #pragma once
 
-#include <random>
-#include <cmath>
-//#include <numbers>
 #include "CoreMinimal.h"
 #include "Animation/AnimMontage.h"
 #include "Enums/GestureType.h"
 #include "Components/ArrowComponent.h"
 #include "GameFramework/Character.h"
-#include "Logging/LogMacros.h"
-#include "./Projectiles/MageProjectile.h"
+#include "Projectiles/MageProjectile.h"
 #include "./MyCharacterMovementComponent.h"
 #include "./Character/CharacterInput.h"
-#include "AIController.h"
 #include "Character/CombatComponent.h"
 #include "MyProjectCharacter.generated.h"
 
@@ -76,6 +71,10 @@ class AMyProjectCharacter : public ACharacter
 	UArrowComponent* ProjectileSpawnPoint;
 	UPROPERTY(EditDefaultsOnly, Category = "Projectile")
 	TSubclassOf<class AMageProjectile> ProjectileClass;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	class URotationSmoothingComponent* RotationSmoothingComponent;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	class UProjectileSpawnerComponent* ProjectileSpawnerComponent;
 
 
 public:
@@ -97,13 +96,7 @@ public:
 
 
 protected:
-	void StartDodge();
-	void FinishDodge(UAnimMontage* Montage, bool bInterrupted);
-
-	void StartAttack();
-	void FinishAttack(UAnimMontage* Montage, bool bInterrupted);
-
-	void DoNothing(UAnimMontage* Montage, bool bInterrupted);
+	// Combat actions handled directly through CombatComponent in multicast RPCs.
 
 	// APawn interface
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -161,32 +154,21 @@ public:
 	void FireProjectile();
 
 private:
-	/*float				PreviousSpeed;*/
 	bool				withoutRootStart = false;
-	TArray<FVector>		SwipePoints;
-	bool				bIsSwipeInProgress;
-	FVector				SwipeStartLocation;
 	FVector2D			MovementVector;
-	float				StartRollYaw;
-	float				RollMovementRotation = 0.f;
-	float				StartHorizontalSmoothRotationOffset = 0.f;
-	float				EndHorizontalSmoothRotationOffset = 0.f;
-	float				CurrentHorizontalSmoothRotationOffset = 0.f;
-	float				SmoothRotationSpeed = 1;
-	float				SmoothRotationElapsedTime = 0.f;
-	FOnMontageEnded		DoNothingDelegate;
-	float				previusVelocity = 0;
-	UInputComponent*	_PlayerInputComponent;
-   	void InitializeMesh();
+	// rotation smoothing moved to RotationSmoothingComponent
+	UInputComponent*	_PlayerInputComponent = nullptr;
+	void InitializeMesh();
 	void InitializeWeapon();
 	void InitializeAnimations();
 	void InitializeInput();
 	void InitializeMovement();
 	void InitializeCamera();
 	void InitializeProjectileSpawnPoint();
-	void PlayMontage(UAnimMontage* Montage, FOnMontageEnded EndDelegate);
 	UFUNCTION()
 	void HandleGesture(EGestureType Gesture);
+	UFUNCTION()
+	void HandleRotationOffsetChanged(float NewOffset);
 
 public:
 	FORCEINLINE UAnimMontage* GetDodgeMontage() const { return DodgeMontage; }
