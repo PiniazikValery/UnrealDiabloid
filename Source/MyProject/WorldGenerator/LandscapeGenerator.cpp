@@ -16,8 +16,12 @@ ALandscapeGenerator::ALandscapeGenerator()
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = true;
 
+	// Create an explicit root so the engine doesn't auto-pick one.
+	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	SetRootComponent(Root);
+
 	TerrainMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("TerrainMesh"));
-	TerrainMesh->SetupAttachment(GetRootComponent());
+	TerrainMesh->SetupAttachment(RootComponent);
 	TerrainMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Script/Engine.Material'/Game/LevelPrototyping/Materials/M_Landscape.M_Landscape'"));
 	bReplicates = true;
 }
@@ -49,14 +53,18 @@ void ALandscapeGenerator::Tick(float DeltaTime)
 		else if (!DrawingTiles)
 		{
 			DrawTilesAsync();
-			 FTimerHandle DelayTimerHandle;
-			 GetWorld()->GetTimerManager().SetTimer(
-				DelayTimerHandle,
-				this,
-				 &ALandscapeGenerator::GenerateNavMeshBoundsNearPlayerAsync,
-				1.0f, // delay in seconds
-				false // don't loop
-			);
+			FTimerHandle DelayTimerHandle;
+			UWorld* World = GetWorld();
+			if (World)
+			{
+				World->GetTimerManager().SetTimer(
+					DelayTimerHandle,
+					this,
+					&ALandscapeGenerator::GenerateNavMeshBoundsNearPlayerAsync,
+					1.0f, // delay in seconds
+					false // don't loop
+				);
+			}
 			//GenerateNavMeshBoundsNearPlayerAsync();
 		}
 	}
@@ -224,7 +232,29 @@ void ALandscapeGenerator::DrawTilesAsync()
 
 void ALandscapeGenerator::RemoveDistantTiles()
 {
-	FVector PlayerLocation = GetWorld()->GetFirstPlayerController()->GetPawn()->GetActorLocation();
+	// Add null checks to prevent crashes
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ALandscapeGenerator::RemoveDistantTiles - World is null"));
+		return;
+	}
+	
+	APlayerController* PlayerController = World->GetFirstPlayerController();
+	if (!PlayerController)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ALandscapeGenerator::RemoveDistantTiles - PlayerController is null"));
+		return;
+	}
+	
+	APawn* PlayerPawn = PlayerController->GetPawn();
+	if (!PlayerPawn)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ALandscapeGenerator::RemoveDistantTiles - PlayerPawn is null"));
+		return;
+	}
+	
+	FVector PlayerLocation = PlayerPawn->GetActorLocation();
 	PlayerLocation.Z = 0;
 	float MaxDistance = (CellSize * NumOfSectionsX * XVertexCount);
 

@@ -32,6 +32,7 @@ void UMyGestureRecognizer::EndGesture(const FVector& End)
 	bGestureActive = false;
 
 	EGestureType Result = RecognizeGesture(LocalPoints);
+	UE_LOG(LogTemp, Warning, TEXT("GestureRecognizer: EndGesture - Result=%d"), (int32)Result);
 	OnGestureRecognized.Broadcast(Result);
 }
 

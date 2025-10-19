@@ -8,6 +8,12 @@
 
 void UCharacterInput::onTriggeredMove(const FInputActionValue& Value)
 {
+	if (!MyCharacter)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MyCharacter is null in onTriggeredMove"));
+		return;
+	}
+	
 	MyCharacter->SetIsPlayerTryingToMove(true);
 	FVector2D MovementVector(Value.Get<FVector2D>().GetRotated(0.f));
 	MyCharacter->SetMovementVector(MovementVector);
@@ -26,11 +32,23 @@ void UCharacterInput::onTriggeredMove(const FInputActionValue& Value)
 
 void UCharacterInput::onOngoingMove()
 {
+	if (!MyCharacter)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MyCharacter is null in onOngoingMove"));
+		return;
+	}
+	
 	MyCharacter->SetIsPlayerTryingToMove(true);
 }
 
 void UCharacterInput::onNoneMove()
 {
+	if (!MyCharacter)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MyCharacter is null in onNoneMove"));
+		return;
+	}
+	
 	MyCharacter->SetIsPlayerTryingToMove(false);
 }
 
@@ -39,6 +57,10 @@ UCharacterInput::UCharacterInput()
 {
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryComponentTick.bCanEverTick = true;
+	
+	// Initialize pointer to nullptr
+	MyCharacter = nullptr;
+	
 	static ConstructorHelpers::FObjectFinder<UInputAction> MoveInputActionAsset(TEXT("/Script/EnhancedInput.InputAction'/Game/ThirdPerson/Input/Actions/IA_Move.IA_Move'"));
 	if (MoveInputActionAsset.Succeeded())
 	{
@@ -56,6 +78,11 @@ void UCharacterInput::BeginPlay()
 {
 	Super::BeginPlay();
 	MyCharacter = Cast<AMyProjectCharacter>(GetOwner());
+	
+	if (!MyCharacter)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to cast owner to AMyProjectCharacter in CharacterInput::BeginPlay"));
+	}
 }
 
 void UCharacterInput::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -65,6 +92,17 @@ void UCharacterInput::TickComponent(float DeltaTime, ELevelTick TickType, FActor
 
 void UCharacterInput::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent, AController* Controller)
 {
+	// Ensure MyCharacter is set before binding input
+	if (!MyCharacter)
+	{
+		MyCharacter = Cast<AMyProjectCharacter>(GetOwner());
+		if (!MyCharacter)
+		{
+			UE_LOG(LogTemp, Error, TEXT("MyCharacter is still null in SetupPlayerInputComponent"));
+			return;
+		}
+	}
+	
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
 	{
 

@@ -22,6 +22,13 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+	virtual void Logout(AController* Exiting) override;
+
+protected:
+	UFUNCTION()
+	void EnsurePlayerControllerInputComponent(APlayerController* PlayerController);
 
 private:
 	void SpawnCharacterAtReachablePointTest();

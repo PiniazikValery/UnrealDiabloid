@@ -11,6 +11,8 @@
 #include "./MyCharacterMovementComponent.h"
 #include "./Character/CharacterInput.h"
 #include "Character/CombatComponent.h"
+#include "Blueprint/UserWidget.h"
+#include "Engine/TimerHandle.h"
 #include "MyProjectCharacter.generated.h"
 
 class USpringArmComponent;
@@ -51,12 +53,13 @@ class AMyProjectCharacter : public ACharacter
 	UInputAction* JumpAction;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* RollAction;
+	/** Dodge Input Action */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* DodgeAction;
 
 	/** Look Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* LookAction;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
-	UAnimMontage* DodgeMontage;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UAnimMontage* StartFMontage;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
@@ -91,8 +94,11 @@ public:
 	void SetMovementVector(FVector2D _MovementVector);
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Character")
 	bool IsPlayerTryingToMove = false;
-	UFUNCTION(Server, Reliable, WithValidation)
+	UFUNCTION(Server, Reliable)
 	void ServerSetIsPlayerTryingToMove(bool NewIsPlayerTryingToMove);
+
+	// Damage funnel to stats component
+	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
 
 
 protected:
@@ -103,19 +109,19 @@ protected:
 	virtual void Tick(float DeltaTime) override;
 	virtual void BeginPlay() override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void PossessedBy(AController* NewController) override;
+	virtual void OnRep_PlayerState() override;
+	virtual void OnRep_Controller() override;
 
 	// Gestures
 	void OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location);
 	void OnSwipeUpdated(ETouchIndex::Type FingerIndex, FVector Location);
 	void OnSwipeEnded(ETouchIndex::Type FingerIndex, FVector Location);
-	// Server RPC for playing montage
-	UFUNCTION(Server, Reliable, WithValidation)
-	void ServerStartDodge();
-
-	// Multicast RPC to play montage on all clients
-	UFUNCTION(NetMulticast, Reliable)
-	void MulticastStartDodge();
-	UFUNCTION(Server, Reliable, WithValidation)
+	// Enhanced Input Action handlers
+	void OnRoll();
+	void OnDodge();
+	// Dodge now fully handled inside CombatComponent with prediction; wrappers removed.
+	UFUNCTION(Server, Reliable)
 	void ServerStartAttack(float angle);
 
 	// Multicast RPC to play montage on all clients
@@ -145,7 +151,7 @@ public:
 	void SetIsAttackEnding(bool value);
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	void SetIsSecondAttackWindowOpen(bool value);
-	UFUNCTION(Server, Reliable, WithValidation)
+	UFUNCTION(Server, Reliable)
 	void ServerSetSecondAttackWindow(bool bOpen);
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCharacterInput* InputHandler;
@@ -153,11 +159,19 @@ public:
 	UMyGestureRecognizer* GestureRecognizer;
 	void FireProjectile();
 
+	// UI
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<UUserWidget> CharacterStatsWidgetClass;
+	UPROPERTY()
+	UUserWidget* CharacterStatsWidget = nullptr;
+
 private:
 	bool				withoutRootStart = false;
 	FVector2D			MovementVector;
 	// rotation smoothing moved to RotationSmoothingComponent
 	UInputComponent*	_PlayerInputComponent = nullptr;
+	FTimerHandle		InputSetupRetryTimer;
+	int32				InputSetupRetryCount = 0;
 	void InitializeMesh();
 	void InitializeWeapon();
 	void InitializeAnimations();
@@ -165,13 +179,27 @@ private:
 	void InitializeMovement();
 	void InitializeCamera();
 	void InitializeProjectileSpawnPoint();
+	void RetryInputSetup();
 	UFUNCTION()
 	void HandleGesture(EGestureType Gesture);
 	UFUNCTION()
 	void HandleRotationOffsetChanged(float NewOffset);
+	// Stats death handler
+	UFUNCTION()
+	void HandleDeath();
+
+
+public: // ========= Stats Component =========
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	class UCharacterStatsComponent* StatsComponent;
+	UFUNCTION(BlueprintPure, Category="Stats") FORCEINLINE UCharacterStatsComponent* GetStatsComponent() const { return StatsComponent; }
+	// Legacy convenience wrappers (redirect to StatsComponent)
+	UFUNCTION(BlueprintCallable, Category="Stats") bool SpendMana(float Amount);
+	UFUNCTION(BlueprintCallable, Category="Stats") void RestoreMana(float Amount);
+	UFUNCTION(BlueprintCallable, Category="Stats") void Heal(float Amount);
+	UFUNCTION(BlueprintPure, Category="Stats") bool IsAlive() const;
 
 public:
-	FORCEINLINE UAnimMontage* GetDodgeMontage() const { return DodgeMontage; }
 	FORCEINLINE UAnimMontage* GetFirstAttackMontage() const { return FirstAttackMontage; }
 	FORCEINLINE UAnimMontage* GetSecondAttackMontage() const { return SecondAttackMontage; }
 	FORCEINLINE UCombatComponent* GetCombatComponent() const { return CombatComponent; }
