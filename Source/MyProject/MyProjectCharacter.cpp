@@ -19,6 +19,7 @@
 #include "Components/RotationSmoothingComponent.h"
 #include "Components/ProjectileSpawnerComponent.h"
 #include "Character/CharacterStatsComponent.h"
+#include "Moves/Dodge.h"
 
 AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UMyCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
@@ -599,18 +600,9 @@ void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 	}
 	else if (Gesture == EGestureType::None)
 	{
-		// Use the new movement component dodge system for swipe down
-		if (IsLocallyControlled())
-		{
-			UMyCharacterMovementComponent* MyMovement = Cast<UMyCharacterMovementComponent>(GetCharacterMovement());
-			if (MyMovement)
-			{
-				MyMovement->StartDodge();
-			}
-		}
-		// std::random_device rd; std::mt19937 gen(rd()); std::uniform_real_distribution<float> dis(-90.f, 90.f);
-		// const float Angle = dis(gen);
-		// if (HasAuthority()) MulticastStartAttack(Angle); else ServerStartAttack(Angle);
+		std::random_device rd; std::mt19937 gen(rd()); std::uniform_real_distribution<float> dis(-90.f, 90.f);
+		const float Angle = dis(gen);
+		if (HasAuthority()) MulticastStartAttack(Angle); else ServerStartAttack(Angle);
 	}
 }
 
