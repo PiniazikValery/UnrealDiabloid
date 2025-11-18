@@ -8,6 +8,7 @@
 #include "NavMesh/NavMeshBoundsVolume.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "HouseSpawner.h"
 #include "LandscapeGenerator.generated.h"
 
 struct FQueuedTileData
@@ -87,6 +88,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadonly)
 	UMaterialInterface* TerrainMaterial = nullptr;
+	
+	UPROPERTY(BlueprintReadonly)
+	AHouseSpawner* HouseSpawner = nullptr;
 	UPROPERTY(BlueprintReadonly)
 	bool DrawingTiles = false;
 	UPROPERTY(BlueprintReadonly)

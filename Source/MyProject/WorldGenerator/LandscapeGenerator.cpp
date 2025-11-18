@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "LandscapeGenerator.h"
+#include "HouseSpawner.h"
 #include "KismetProceduralMeshLibrary.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Character.h"
@@ -121,6 +122,25 @@ ALandscapeGenerator::ALandscapeGenerator()
 void ALandscapeGenerator::BeginPlay()
 {
 	Super::BeginPlay();
+	
+	// Spawn HouseSpawner
+	if (UWorld* World = GetWorld())
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Owner = this;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		
+		HouseSpawner = World->SpawnActor<AHouseSpawner>(
+			AHouseSpawner::StaticClass(),
+			GetActorLocation(),
+			FRotator::ZeroRotator,
+			SpawnParams);
+		
+		if (HouseSpawner)
+		{
+			UE_LOG(LogTemp, Log, TEXT("HouseSpawner created successfully by LandscapeGenerator"));
+		}
+	}
 }
 
 // Called every frame
