@@ -10,6 +10,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "../MyProjectCharacter.h"
+#include "../EnemyCharacter.h"
 #include "AI/NavigationSystemBase.h"
 #include "NavigationSystem.h"
 #include "NavigationPath.h"
@@ -43,6 +44,8 @@ private:
 
 	bool  bIsInAttackRange = false;
 	float TimeSinceLastMoveRequest = 0.f;
+	float TimeSinceLastAttack = 0.f;
 
 	void MoveToPlayer();
+	void PerformAttack();
 };

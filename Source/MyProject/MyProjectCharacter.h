@@ -13,6 +13,7 @@
 #include "Character/CombatComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/TimerHandle.h"
+#include "CharacterConfigurationAsset.h"
 #include "MyProjectCharacter.generated.h"
 
 class USpringArmComponent;
@@ -21,6 +22,8 @@ class UInputMappingContext;
 class UInputAction;
 struct FInputActionValue;
 class UMyGestureRecognizer; // Forward declaration
+class UCharacterSetupComponent; // Forward declaration
+class UCharacterNetworkComponent; // Forward declaration
 
 UENUM(BlueprintType)
 enum class EEnemyType : uint8
@@ -36,44 +39,73 @@ class AMyProjectCharacter : public ACharacter
 {
 	GENERATED_BODY()
 
+public:
 	/** Camera boom positioning the camera behind the character */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera)
 	USpringArmComponent* CameraBoom;
 
 	/** Follow camera */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera)
 	UCameraComponent* FollowCamera;
 
-	/** MappingContext */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
-	UInputMappingContext* DefaultMappingContext;
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera)
 	class USceneComponent* CameraRoot;
 
-	/** Jump Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+	UStaticMeshComponent* WeaponMesh;
+	
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Projectile)
+	UArrowComponent* ProjectileSpawnPoint;
+
+	// Setup Component - handles all initialization
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UCharacterSetupComponent* SetupComponent;
+
+	/** Network Component - handles all RPC and replication logic */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	UCharacterNetworkComponent* NetworkComponent;
+
+private:
+
+	// ========= CONFIGURATION ASSET =========
+	/** Configuration asset containing all character settings */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Configuration", meta = (AllowPrivateAccess = "true"))
+	UCharacterConfigurationAsset* CharacterConfig;
+
+	// ========= CACHED REFERENCES (loaded from config) =========
+	/** MappingContext - loaded from config */
+	UPROPERTY(BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputMappingContext* DefaultMappingContext;
+
+	/** Jump Input Action - loaded from config */
+	UPROPERTY(BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* JumpAction;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	
+	UPROPERTY(BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* RollAction;
-	/** Dodge Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	
+	/** Dodge Input Action - loaded from config */
+	UPROPERTY(BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* DodgeAction;
 
 	/** Look Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* LookAction;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	
+	// DEPRECATED: Animation montages - Use AnimationComponent instead
+	// Kept temporarily for backward compatibility
+	UPROPERTY(BlueprintReadOnly, Category = Animation, meta = (AllowPrivateAccess = "true", DeprecatedProperty, DeprecationMessage = "Use AnimationComponent->GetFirstAttackMontage() instead"))
 	UAnimMontage* StartFMontage;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, Category = Animation, meta = (AllowPrivateAccess = "true", DeprecatedProperty, DeprecationMessage = "Use AnimationComponent instead"))
 	UAnimMontage* StartRMontage;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, Category = Animation, meta = (AllowPrivateAccess = "true", DeprecatedProperty, DeprecationMessage = "Use AnimationComponent->GetFirstAttackMontage() instead"))
 	UAnimMontage* FirstAttackMontage;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(BlueprintReadOnly, Category = Animation, meta = (AllowPrivateAccess = "true", DeprecatedProperty, DeprecationMessage = "Use AnimationComponent->GetSecondAttackMontage() instead"))
 	UAnimMontage* SecondAttackMontage;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
-	UStaticMeshComponent* WeaponMesh;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
-	UArrowComponent* ProjectileSpawnPoint;
-	UPROPERTY(EditDefaultsOnly, Category = "Projectile")
+	
+	// Projectile class - loaded from config (kept as property for backward compatibility)
 	TSubclassOf<class AMageProjectile> ProjectileClass;
+	
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	class URotationSmoothingComponent* RotationSmoothingComponent;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
@@ -83,8 +115,14 @@ class AMyProjectCharacter : public ACharacter
 public:
 	AMyProjectCharacter(const FObjectInitializer& ObjectInitializer);
 	void PossessAIController(UClass* _AIControllerClass);
-	bool GetIsPlayerTryingToMove();
-	void SetIsPlayerTryingToMove(bool value);
+	
+	// Network component wrapper functions for backward compatibility
+	UFUNCTION(BlueprintCallable, Category = "Character|Network")
+	bool GetIsPlayerTryingToMove() const;
+	
+	UFUNCTION(BlueprintCallable, Category = "Character|Network")
+	void SetIsPlayerTryingToMove(bool bValue);
+	
 	void SetAllowPhysicsRotationDuringAnimRootMotion(bool value);
 	void SetOrientRotationToMovement(bool value);
 	void SetRotationRate(FRotator rotation);
@@ -92,10 +130,6 @@ public:
 	void SwitchToWalking();
 	void SwitchToRunning();
 	void SetMovementVector(FVector2D _MovementVector);
-	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Character")
-	bool IsPlayerTryingToMove = false;
-	UFUNCTION(Server, Reliable)
-	void ServerSetIsPlayerTryingToMove(bool NewIsPlayerTryingToMove);
 
 	// Damage funnel to stats component
 	virtual float TakeDamage(float DamageAmount, struct FDamageEvent const& DamageEvent, class AController* EventInstigator, AActor* DamageCauser) override;
@@ -112,6 +146,7 @@ protected:
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_PlayerState() override;
 	virtual void OnRep_Controller() override;
+	virtual void PostInitializeComponents() override;
 
 	// Gestures
 	void OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location);
@@ -121,12 +156,6 @@ protected:
 	void OnRoll();
 	void OnDodge();
 	// Dodge now fully handled inside CombatComponent with prediction; wrappers removed.
-	UFUNCTION(Server, Reliable)
-	void ServerStartAttack(float angle);
-
-	// Multicast RPC to play montage on all clients
-	UFUNCTION(NetMulticast, Reliable)
-	void MulticastStartAttack(float angle);
 
 public:
 	/** Returns CameraBoom subobject **/
@@ -151,16 +180,21 @@ public:
 	void SetIsAttackEnding(bool value);
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	void SetIsSecondAttackWindowOpen(bool value);
-	UFUNCTION(Server, Reliable)
-	void ServerSetSecondAttackWindow(bool bOpen);
+	UFUNCTION(BlueprintCallable, Category = "Combat")
+	void SetIsAttacking(bool value);
+	UFUNCTION(BlueprintCallable, Category = "Combat")
+	void DetectHit();
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UCharacterInput* InputHandler;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UMyGestureRecognizer* GestureRecognizer;
+	
+	/** NEW: Animation component - handles all animation logic */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
+	class UCharacterAnimationComponent* AnimationComponent;
 	void FireProjectile();
 
-	// UI
-	UPROPERTY(EditDefaultsOnly, Category="UI")
+	// UI - loaded from config
 	TSubclassOf<UUserWidget> CharacterStatsWidgetClass;
 	UPROPERTY()
 	UUserWidget* CharacterStatsWidget = nullptr;
@@ -173,12 +207,7 @@ private:
 	FTimerHandle		InputSetupRetryTimer;
 	int32				InputSetupRetryCount = 0;
 	void InitializeMesh();
-	void InitializeWeapon();
-	void InitializeAnimations();
 	void InitializeInput();
-	void InitializeMovement();
-	void InitializeCamera();
-	void InitializeProjectileSpawnPoint();
 	void RetryInputSetup();
 	UFUNCTION()
 	void HandleGesture(EGestureType Gesture);
@@ -187,6 +216,11 @@ private:
 	// Stats death handler
 	UFUNCTION()
 	void HandleDeath();
+	// Animation event handlers
+	UFUNCTION()
+	void HandleAnimationComplete(FName AnimationName);
+	UFUNCTION()
+	void HandleAnimationStarted(FName AnimationName);
 
 
 public: // ========= Stats Component =========
@@ -204,7 +238,6 @@ public:
 	FORCEINLINE UAnimMontage* GetSecondAttackMontage() const { return SecondAttackMontage; }
 	FORCEINLINE UCombatComponent* GetCombatComponent() const { return CombatComponent; }
 
-private:
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
 	UCombatComponent* CombatComponent;
 };

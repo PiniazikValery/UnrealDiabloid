@@ -8,6 +8,19 @@
 
 class AMyProjectCharacter;
 
+/**
+ * Combat state machine states
+ */
+UENUM(BlueprintType)
+enum class ECombatState : uint8
+{
+	Idle UMETA(DisplayName = "Idle"),
+	Attacking UMETA(DisplayName = "Attacking"),
+	AttackRecovery UMETA(DisplayName = "Attack Recovery"),
+	Dodging UMETA(DisplayName = "Dodging"),
+	Stunned UMETA(DisplayName = "Stunned")
+};
+
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class UCombatComponent : public UActorComponent
 {
@@ -63,25 +76,55 @@ public:
     UPROPERTY(ReplicatedUsing=OnRep_DodgeStartTime)
     float DodgeStartTime = 0.f;
 
-    // ============= Attack State (unchanged) =============
+    // ============= Combat State Machine =============
+    UPROPERTY(BlueprintReadOnly, ReplicatedUsing=OnRep_CombatState)
+    ECombatState CurrentCombatState = ECombatState::Idle;
+    
+    // ============= Attack State (legacy support) =============
     UPROPERTY(BlueprintReadOnly, Replicated)
     bool bIsAttacking = false;
     UPROPERTY(BlueprintReadOnly, Replicated)
     bool bIsAttackEnding = false;
     UPROPERTY(BlueprintReadOnly, Replicated)
     bool bIsSecondAttackWindowOpen = false;
+    
+    // ============= Melee Combat =============
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat")
+    float MeleeDamage = 10.f;
+    
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat")
+    float MeleeRange = 50.f;
 
-    // ===== Interface =====
+    // ===== Combat State Interface =====
+    UFUNCTION(BlueprintPure, Category="Combat")
+    ECombatState GetCombatState() const { return CurrentCombatState; }
+    
+    UFUNCTION(BlueprintCallable, Category="Combat")
+    void SetCombatState(ECombatState NewState);
+    
+    UFUNCTION(BlueprintPure, Category="Combat")
+    bool CanPerformAction() const;
+    
+    // ===== Dodge Interface =====
     void StartDodge();
     bool CanDodge() const { return !bIsDodging && GetWorld() && GetWorld()->GetTimeSeconds() >= NextDodgeTime; }
     bool GetIsDodging() const { return bIsDodging; }
     bool GetIsInvincible() const { return bIsInvincible; }
 
+    // ===== Attack Interface =====
     void StartAttack();
     void FinishAttack(class UAnimMontage* Montage, bool bInterrupted);
     void SetIsAttackEnding(bool Value) { bIsAttackEnding = Value; }
     void SetIsSecondAttackWindowOpen(bool Value) { bIsSecondAttackWindowOpen = Value; }
     bool GetIsAttacking() const { return bIsAttacking; }
+    
+    // ===== Hit Detection =====
+    UFUNCTION(BlueprintCallable, Category="Combat")
+    void DetectHit();
+    
+    // Animation event handler
+    UFUNCTION()
+    void OnAttackAnimationComplete(FName AnimationName);
 
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     virtual void BeginPlay() override;
@@ -100,6 +143,9 @@ protected:
     
     UFUNCTION()
     void OnRep_DodgeStartTime();
+    
+    UFUNCTION()
+    void OnRep_CombatState();
 
 private:
     // Cached owner

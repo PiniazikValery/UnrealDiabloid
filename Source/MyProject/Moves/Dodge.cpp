@@ -9,9 +9,9 @@
 
 UDodge::UDodge()
 {
-    // Default dodge values
-    DodgeSpeed = 1900.0f;
-    DodgeDuration = 0.5f;
+    // Default dodge values - reduced by half
+    DodgeSpeed = 1425.0f;
+    DodgeDuration = 0.375f;
     DodgeCooldown = 1.0f;
     GroundDodgeMultiplier = 1.2f;
     DodgeGroundClearance = 50.0f;  // Small clearance for ground obstacles

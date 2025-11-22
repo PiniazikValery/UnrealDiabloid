@@ -72,36 +72,51 @@ void AMyAIController::Tick(float DeltaSeconds)
 	const FVector AILocation = GetPawn()->GetActorLocation();
 	const float	  DistanceToPlayer = FVector::Dist(PlayerLocation, AILocation);
 
+	// Face the player
+	FVector Direction = PlayerLocation - AILocation;
+	Direction.Z = 0;
+	if (!Direction.IsNearlyZero())
+	{
+		FRotator NewRotation = Direction.Rotation();
+		GetPawn()->SetActorRotation(FMath::RInterpTo(GetPawn()->GetActorRotation(), NewRotation, DeltaSeconds, 10.0f));
+	}
+
 	// Attack if in range
-	if (DistanceToPlayer < 100.0f)
+	if (DistanceToPlayer < 150.0f)
 	{
 		if (!bIsInAttackRange)
 		{
 			bIsInAttackRange = true;
-			StopMovement();
-
-			if (Agent)
-			{
-				Agent->SetIsPlayerTryingToMove(false);
-				// Agent->StartAttack(); // Enable when ready
-			}
+			// Immediate first attack
+			PerformAttack();
+			TimeSinceLastAttack = 0.f;
 		}
-		return;
+
+		// Perform attack every 1.5 seconds
+		TimeSinceLastAttack += DeltaSeconds;
+		if (TimeSinceLastAttack >= 1.5f)
+		{
+			PerformAttack();
+			TimeSinceLastAttack = 0.f;
+		}
 	}
 	else if (bIsInAttackRange)
 	{
 		bIsInAttackRange = false;
+		TimeSinceLastAttack = 0.f;
 	}
 
+	// Always keep moving toward player
 	TimeSinceLastMoveRequest += DeltaSeconds;
 
-	// Only update path if player moved far enough or we're idle
-	if (TimeSinceLastMoveRequest >= 0.5f)
+	// Update path frequently to follow player smoothly
+	if (TimeSinceLastMoveRequest >= 0.2f)
 	{
 		TimeSinceLastMoveRequest = 0.f;
 
 		const float PlayerMovedDistance = FVector::Dist(PlayerLocation, PreviousPlayerLocation);
-		if (PlayerMovedDistance > 50.f)
+		// Move even if player hasn't moved much, to continuously chase
+		if (PlayerMovedDistance > 10.f || DistanceToPlayer > 50.0f)
 		{
 			MoveToPlayer();
 			PreviousPlayerLocation = PlayerLocation;
@@ -115,13 +130,16 @@ void AMyAIController::MoveToPlayer()
 		return;
 
 	const FVector PlayerLocation = PlayerPawn->GetActorLocation();
-	const float	  AcceptanceRadius = 30.0f;
+	const float	  AcceptanceRadius = 30.0f; // Smaller radius to get closer
 
 	const EPathFollowingRequestResult::Type MoveResult = MoveToLocation(PlayerLocation, AcceptanceRadius);
 
 	switch (MoveResult)
 	{
 		case EPathFollowingRequestResult::AlreadyAtGoal:
+			// Even at goal, keep trying to move for smooth following
+			Agent->SetIsPlayerTryingToMove(true);
+			break;
 		case EPathFollowingRequestResult::Failed:
 			Agent->SetIsPlayerTryingToMove(false);
 			break;
@@ -132,4 +150,22 @@ void AMyAIController::MoveToPlayer()
 	}
 
 	LocationToMove = PlayerLocation;
+}
+
+void AMyAIController::PerformAttack()
+{
+	if (!Agent)
+		return;
+
+	// Cast to EnemyCharacter to use zombie attack
+	AEnemyCharacter* Enemy = Cast<AEnemyCharacter>(Agent);
+	if (Enemy)
+	{
+		Enemy->PlayZombieAttack();
+		UE_LOG(LogTemp, Log, TEXT("Enemy performing zombie attack"));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Agent is not an EnemyCharacter"));
+	}
 }

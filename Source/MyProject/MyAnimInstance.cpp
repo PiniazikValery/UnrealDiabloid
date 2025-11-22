@@ -41,7 +41,7 @@ void UMyAnimInstance::SetMomentumProperties()
 	BrakingDecelerationWalking = CharacterMovementReference->BrakingDecelerationWalking;
 }
 
-void UMyAnimInstance::SetMovementProperties()
+void UMyAnimInstance::SetMovementProperties(float DeltaSeconds)
 {
 	LookRotation = CharacterReference->GetLookRotation();
 	IsWalking = CharacterReference->GetIsWalking();
@@ -56,10 +56,35 @@ void UMyAnimInstance::SetMovementProperties()
 	}
 	InputDirection = NextInputDirection;
 	Velocity = CharacterReference->GetVelocity();
+	HasVelocity = !Velocity.IsZero();
 	MaxSpeed = CharacterMovementReference->MaxWalkSpeed;
 	GroundSpeed = Velocity.Size();
 	ShouldMove = !CharacterMovementReference->GetCurrentAcceleration().IsZero() && GroundSpeed > 3;
 	IsFalling = CharacterMovementReference->IsFalling();
+	
+	// Smooth HasAcceleration to prevent flickering during rapid input
+	bool bHasRawAcceleration = !CharacterMovementReference->GetCurrentAcceleration().IsZero();
+	
+	if (bHasRawAcceleration)
+	{
+		// If we have acceleration, immediately set to true and reset timer
+		HasAcceleration = true;
+		AccelerationSmoothTimer = AccelerationSmoothDelay;
+	}
+	else
+	{
+		// If no acceleration, only set to false after delay expires
+		if (AccelerationSmoothTimer > 0.0f)
+		{
+			AccelerationSmoothTimer -= DeltaSeconds;
+			HasAcceleration = true; // Keep true during delay
+		}
+		else
+		{
+			HasAcceleration = false;
+		}
+	}
+	
 	IsAccelerating = CharacterMovementReference->GetCurrentAcceleration().SizeSquared() > 1;
 }
 
@@ -116,7 +141,7 @@ void UMyAnimInstance::NativeThreadSafeUpdateAnimation(float DeltaSeconds)
 	if (CharacterReference && CharacterMovementReference)
 	{
 		SetDodgeProperties();
-		SetMovementProperties();
+		SetMovementProperties(DeltaSeconds);
 		CalculateDirection();
 		SetMomentumProperties();
 		SetMovementInput();

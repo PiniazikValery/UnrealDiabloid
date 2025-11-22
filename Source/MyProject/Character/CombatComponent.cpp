@@ -1,6 +1,8 @@
 // Physics-based dodge + attack component implementation
 #include "CombatComponent.h"
 #include "../MyProjectCharacter.h"
+#include "../EnemyCharacter.h"
+#include "CharacterAnimationComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "Engine/World.h"
@@ -8,6 +10,9 @@
 #include "DrawDebugHelpers.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Engine/DamageEvents.h"
+#include "Engine/OverlapResult.h"
+#include "Components/SkeletalMeshComponent.h"
 
 UCombatComponent::UCombatComponent()
 {
@@ -19,6 +24,141 @@ void UCombatComponent::BeginPlay()
 {
 	Super::BeginPlay();
 	OwnerCharacter = Cast<AMyProjectCharacter>(GetOwner());
+}
+
+// ============== Combat State Machine ==============
+void UCombatComponent::SetCombatState(ECombatState NewState)
+{
+	if (CurrentCombatState == NewState)
+	{
+		return;
+	}
+	
+	ECombatState OldState = CurrentCombatState;
+	CurrentCombatState = NewState;
+	
+	UE_LOG(LogTemp, Log, TEXT("Combat State changed: %d -> %d"), (int32)OldState, (int32)NewState);
+	
+	// Update legacy flags for backward compatibility
+	switch (NewState)
+	{
+		case ECombatState::Attacking:
+			bIsAttacking = true;
+			bIsAttackEnding = false;
+			break;
+			
+		case ECombatState::AttackRecovery:
+			bIsAttackEnding = true;
+			break;
+			
+		case ECombatState::Dodging:
+			bIsDodging = true;
+			break;
+			
+		case ECombatState::Idle:
+			bIsAttacking = false;
+			bIsAttackEnding = false;
+			bIsDodging = false;
+			bIsSecondAttackWindowOpen = false;
+			break;
+			
+		default:
+			break;
+	}
+}
+
+bool UCombatComponent::CanPerformAction() const
+{
+	// Can only perform new actions when idle or in attack recovery
+	return CurrentCombatState == ECombatState::Idle || 
+	       CurrentCombatState == ECombatState::AttackRecovery;
+}
+
+void UCombatComponent::OnRep_CombatState()
+{
+	UE_LOG(LogTemp, Log, TEXT("[CLIENT] Combat state replicated: %d"), (int32)CurrentCombatState);
+	
+	// Update legacy flags on clients
+	SetCombatState(CurrentCombatState);
+}
+
+// ============== Hit Detection ==============
+void UCombatComponent::DetectHit()
+{
+	if (!OwnerCharacter.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("DetectHit: No owner character!"));
+		return;
+	}
+	
+	USkeletalMeshComponent* Mesh = OwnerCharacter->GetMesh();
+	if (!Mesh)
+	{
+		UE_LOG(LogTemp, Error, TEXT("DetectHit: No mesh!"));
+		return;
+	}
+
+	// Get hand_r bone location for hit detection
+	FVector HandLocation = Mesh->GetSocketLocation(FName("hand_r"));
+	UE_LOG(LogTemp, Error, TEXT("DetectHit: HandLocation = (%f, %f, %f)"), 
+		HandLocation.X, HandLocation.Y, HandLocation.Z);
+	
+	// Perform sphere overlap at hand location
+	FCollisionShape Sphere = FCollisionShape::MakeSphere(MeleeRange);
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(OwnerCharacter.Get());
+	QueryParams.bTraceComplex = false;
+	
+	// Use ObjectQuery instead of ChannelQuery to detect all Pawn types
+	TArray<FOverlapResult> OverlapResults;
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_Pawn);
+	
+	bool bHit = GetWorld()->OverlapMultiByObjectType(
+		OverlapResults,
+		HandLocation,
+		FQuat::Identity,
+		ObjectQueryParams,
+		Sphere,
+		QueryParams
+	);
+	
+	if (bHit)
+	{
+		for (const FOverlapResult& Overlap : OverlapResults)
+		{
+			AActor* HitActor = Overlap.GetActor();
+			UE_LOG(LogTemp, Error, TEXT("DetectHit: Found overlap with: %s (Component: %s)"), 
+				HitActor ? *HitActor->GetName() : TEXT("NULL"),
+				Overlap.GetComponent() ? *Overlap.GetComponent()->GetName() : TEXT("NULL"));
+			
+			if (HitActor && HitActor != OwnerCharacter.Get())
+			{
+				// Check if both are enemies (prevent friendly fire between enemies)
+				AEnemyCharacter* ThisAsEnemy = Cast<AEnemyCharacter>(OwnerCharacter.Get());
+				AEnemyCharacter* TargetAsEnemy = Cast<AEnemyCharacter>(HitActor);
+				
+				// Skip if both are enemies (friendly fire prevention)
+				if (ThisAsEnemy && TargetAsEnemy)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("DetectHit: Skipping enemy-to-enemy damage: %s -> %s"), 
+						*OwnerCharacter->GetName(), *HitActor->GetName());
+					continue;
+				}
+				
+				UE_LOG(LogTemp, Error, TEXT("DetectHit: Applying damage to: %s"), *HitActor->GetName());
+				
+				// Apply damage to hit actor
+				FDamageEvent DamageEvent;
+				
+				float ActualDamage = HitActor->TakeDamage(MeleeDamage, DamageEvent, 
+					OwnerCharacter->GetController(), OwnerCharacter.Get());
+				
+				UE_LOG(LogTemp, Error, TEXT("DetectHit: Damage applied! MeleeDamage=%f, ActualDamage=%f"), 
+					MeleeDamage, ActualDamage);
+			}
+		}
+	}
 }
 
 // ============== COMMENTED OUT: Original Velocity-Based Dodge Implementation ==============
@@ -385,6 +525,7 @@ void UCombatComponent::ExecuteImpulseDodge(FVector Direction)
 
 	// Set dodge state
 	bIsDodging = true;
+	SetCombatState(ECombatState::Dodging);
 	// bIsInvincible = true;
 	// ReplicatedDodgeDirection = FinalDirection;
 	// DodgeStartTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
@@ -842,71 +983,8 @@ void UCombatComponent::UpdateDodge(float DeltaTime)
 
 void UCombatComponent::EndDodge()
 {
-// 	if (!OwnerCharacter.IsValid()) return;
-	
-// 	// Cache frequently used values
-// 	UWorld* World = GetWorld();
-// 	UCharacterMovementComponent* MoveComp = OwnerCharacter->GetCharacterMovement();
-	
 	bIsDodging = false;
-// 	bIsInvincible = false;
-	
-// 	if (MoveComp)
-// 	{
-// 		// Restore movement settings
-// 		MoveComp->GroundFriction = OriginalGroundFriction;
-// 		MoveComp->BrakingDecelerationWalking = OriginalBrakingDeceleration;
-// 		MoveComp->bUseSeparateBrakingFriction = true;
-// 		MoveComp->bOrientRotationToMovement = true;
-		
-// 		// Network-aware velocity handling following the same pattern as StartDodge
-// 		if (OwnerCharacter->HasAuthority())
-// 		{
-// 			// Server: Apply velocity reduction authoritatively
-// 			const float VelocityReductionFactor = (NetworkQualityScore < PoorConnectionThreshold) ? 0.5f : 0.3f;
-// 			FVector& Velocity = MoveComp->Velocity;
-// 			const float OriginalZ = Velocity.Z;
-// 			Velocity *= VelocityReductionFactor;
-// 			Velocity.Z = OriginalZ;
-// 		}
-// 		else if (OwnerCharacter->IsLocallyControlled())
-// 		{
-// 			// Locally controlled client: Apply smooth velocity reduction for immediate feedback (prediction)
-// 			const float VelocityReductionFactor = (NetworkQualityScore < PoorConnectionThreshold) ? 0.5f : 0.3f;
-// 			FVector& Velocity = MoveComp->Velocity;
-// 			const float OriginalZ = Velocity.Z;
-			
-// 			// Smoother client-side velocity reduction for better feel
-// 			FVector HorizontalVel = FVector(Velocity.X, Velocity.Y, 0.f);
-// 			float CurrentSpeed = HorizontalVel.Size();
-			
-// 			if (CurrentSpeed > 0.f)
-// 			{
-// 				// Apply a speed-based reduction that feels more natural
-// 				float SpeedReductionFactor = FMath::Clamp(CurrentSpeed / 800.f, 0.2f, 1.f);
-// 				FVector ReducedDirection = HorizontalVel.GetSafeNormal();
-// 				Velocity = ReducedDirection * (CurrentSpeed * VelocityReductionFactor * SpeedReductionFactor);
-// 				Velocity.Z = OriginalZ;
-// 			}
-// 		}
-// 		// Non-locally controlled clients: Don't modify velocity, let server replication handle it
-		
-// #if UE_BUILD_DEBUG || UE_BUILD_DEVELOPMENT
-// 		// Only log in debug builds to avoid performance cost in shipping
-// 		UE_LOG(LogTemp, Verbose, TEXT("[%s] EndDodge: Velocity transition applied"), 
-// 			OwnerCharacter->HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
-// #endif
-// 	}
-	
-// 	// Clear the dodge end timer
-// 	if (World)
-// 	{
-// 		World->GetTimerManager().ClearTimer(DodgeEndTimerHandle);
-// 	}
-	
-// 	// Clear history and dodge velocity
-// 	PositionHistory.Empty();
-// 	DodgeVelocity = FVector::ZeroVector;
+	SetCombatState(ECombatState::Idle);
 }
 
 void UCombatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
@@ -945,39 +1023,84 @@ void UCombatComponent::PlayMontage(UAnimMontage* Montage, FOnMontageEnded& Deleg
 void UCombatComponent::StartAttack()
 {
 	if (!OwnerCharacter.IsValid() || bIsDodging) return; // can't attack mid-dodge
+	
+	// Use AnimationComponent if available
+	UCharacterAnimationComponent* AnimComp = OwnerCharacter->AnimationComponent;
+	if (!AnimComp)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("CombatComponent::StartAttack: No AnimationComponent found!"));
+		return;
+	}
+	
+	// Fallback to direct AnimInstance check if needed
 	UAnimInstance* AnimInstance = OwnerCharacter->GetMesh()->GetAnimInstance();
 	if (!AnimInstance) return;
 
 	OwnerCharacter->SwitchToWalking();
 	AttackMontageDelegate.Unbind();
 
-	if (bIsSecondAttackWindowOpen && !AnimInstance->Montage_IsPlaying(OwnerCharacter->GetSecondAttackMontage()))
+	if (bIsSecondAttackWindowOpen && !AnimComp->IsPlayingMontage(AnimComp->GetSecondAttackMontage()))
 	{
 		bIsAttacking = true;
+		SetCombatState(ECombatState::Attacking);
 		AttackMontageDelegate.BindUObject(this, &UCombatComponent::FinishAttack);
-		PlayMontage(OwnerCharacter->GetSecondAttackMontage(), AttackMontageDelegate);
+		
+		// Use AnimationComponent to play animation
+		bool bPlayed = AnimComp->PlaySecondAttack();
+		if (bPlayed)
+		{
+			// Bind to completion event
+			AnimComp->OnAnimationComplete.AddDynamic(this, &UCombatComponent::OnAttackAnimationComplete);
+		}
 		return;
 	}
-	if ((!bIsAttacking || bIsAttackEnding) && !AnimInstance->Montage_IsPlaying(OwnerCharacter->GetFirstAttackMontage()))
+	if ((!bIsAttacking || bIsAttackEnding) && !AnimComp->IsPlayingMontage(AnimComp->GetFirstAttackMontage()))
 	{
 		bIsAttacking = true;
+		SetCombatState(ECombatState::Attacking);
 		AttackMontageDelegate.BindUObject(this, &UCombatComponent::FinishAttack);
-		PlayMontage(OwnerCharacter->GetFirstAttackMontage(), AttackMontageDelegate);
+		
+		// Use AnimationComponent to play animation
+		bool bPlayed = AnimComp->PlayFirstAttack();
+		if (bPlayed)
+		{
+			// Bind to completion event
+			AnimComp->OnAnimationComplete.AddDynamic(this, &UCombatComponent::OnAttackAnimationComplete);
+		}
 	}
 }
 
 void UCombatComponent::FinishAttack(UAnimMontage* Montage, bool bInterrupted)
 {
 	bIsAttacking = false;
+	SetCombatState(ECombatState::Idle);
 	if (OwnerCharacter.IsValid() && !bInterrupted)
 	{
 		OwnerCharacter->SwitchToRunning();
 	}
 }
 
+void UCombatComponent::OnAttackAnimationComplete(FName AnimationName)
+{
+	UE_LOG(LogTemp, Log, TEXT("CombatComponent: Attack animation complete: %s"), *AnimationName.ToString());
+	
+	// Handle attack completion
+	if (AnimationName == TEXT("FirstAttack") || AnimationName == TEXT("SecondAttack"))
+	{
+		bIsAttacking = false;
+		SetCombatState(ECombatState::Idle);
+		if (OwnerCharacter.IsValid())
+		{
+			OwnerCharacter->SwitchToRunning();
+		}
+	}
+}
+
+
 void UCombatComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(UCombatComponent, CurrentCombatState);
 	DOREPLIFETIME(UCombatComponent, bIsDodging);
 	DOREPLIFETIME(UCombatComponent, bIsInvincible);
 	DOREPLIFETIME(UCombatComponent, bIsAttacking);

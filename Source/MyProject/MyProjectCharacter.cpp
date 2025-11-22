@@ -1,6 +1,11 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MyProjectCharacter.h"
+#include "CharacterConfigurationAsset.h"
+#include "Components/CharacterSetupComponent.h"
+#include "Components/CharacterNetworkComponent.h"
+#include "Character/CharacterAnimationComponent.h"
+#include "EnemyCharacter.h"
 #include "UMyGestureRecognizer.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
@@ -12,7 +17,6 @@
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
-#include "Net/UnrealNetwork.h"
 #include <random>
 #include <cmath>
 #include "AIController.h"
@@ -20,161 +24,209 @@
 #include "Components/ProjectileSpawnerComponent.h"
 #include "Character/CharacterStatsComponent.h"
 #include "Moves/Dodge.h"
+#include "Engine/DamageEvents.h"
+#include "Engine/OverlapResult.h"
 
 AMyProjectCharacter::AMyProjectCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UMyCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
-	InitializeMesh();
-	InitializeWeapon();
-	InitializeAnimations();
-	InitializeInput();
-	InitializeMovement();
-	InitializeCamera();
-	InitializeProjectileSpawnPoint(); // kept for backward compatibility (spawner component also creates one)
-
+	// Enable replication
 	bReplicates = true;
-	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
-	GestureRecognizer = CreateDefaultSubobject<UMyGestureRecognizer>(TEXT("GestureRecognizer"));
-	CombatComponent = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
-	RotationSmoothingComponent = CreateDefaultSubobject<URotationSmoothingComponent>(TEXT("RotationSmoothingComponent"));
-	ProjectileSpawnerComponent = CreateDefaultSubobject<UProjectileSpawnerComponent>(TEXT("ProjectileSpawnerComponent"));
-	if (RotationSmoothingComponent && ProjectileSpawnerComponent)
+	SetReplicateMovement(true);
+	
+	// ===== CAPSULE INITIALIZATION =====
+	// Initialize capsule size FIRST to ensure consistent size across network
+	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
+	
+	// ===== COMPONENT CREATION =====
+	// Components are created here because they must exist before PostInitializeComponents()
+	// Configuration of components is handled in PostInitializeComponents() by SetupComponent
+	
+	// Create the setup component FIRST
+	SetupComponent = CreateDefaultSubobject<UCharacterSetupComponent>(TEXT("SetupComponent"));
+	
+	// Create the network component to handle all RPCs and replication
+	NetworkComponent = CreateDefaultSubobject<UCharacterNetworkComponent>(TEXT("NetworkComponent"));
+	
+	// Load default configuration asset
+	static ConstructorHelpers::FObjectFinder<UCharacterConfigurationAsset> DefaultConfig(TEXT("/Game/Config/DA_DefaultCharacterConfig.DA_DefaultCharacterConfig"));
+	if (DefaultConfig.Succeeded())
 	{
-		RotationSmoothingComponent->OnRotationOffsetChanged.AddDynamic(this, &AMyProjectCharacter::HandleRotationOffsetChanged);
+		CharacterConfig = DefaultConfig.Object;
 	}
-	GestureRecognizer->OnGestureRecognized.AddDynamic(this, &AMyProjectCharacter::HandleGesture);
-	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
-	ProjectileClass = AMageProjectile::StaticClass();
-
-	StatsComponent = CreateDefaultSubobject<UCharacterStatsComponent>(TEXT("StatsComponent"));
-	if (StatsComponent)
-	{
-		StatsComponent->OnDied.AddDynamic(this, &AMyProjectCharacter::HandleDeath);
-	}
-
-	// Load default stats widget class (can be overridden in BP)
-	static ConstructorHelpers::FClassFinder<UUserWidget> StatsWidgetBP(TEXT("/Game/UI/CharacterStats.CharacterStats_C"));
-	if (StatsWidgetBP.Succeeded())
-	{
-		CharacterStatsWidgetClass = StatsWidgetBP.Class;
-	}
-}
-
-void AMyProjectCharacter::InitializeMesh()
-{
-	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MeshAsset(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
-	if (MeshAsset.Succeeded())
-	{
-		GetMesh()->SetSkeletalMesh(MeshAsset.Object);
-		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -90.0f));
-		GetMesh()->SetRelativeRotation(FRotator(0.0f, 270.0f, 0.0f));
-		GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		GetMesh()->SetCollisionResponseToAllChannels(ECR_Ignore);
-	}
-}
-
-void AMyProjectCharacter::InitializeWeapon()
-{
+	
+	// Initialize mesh in constructor to ensure it's set before replication
+	InitializeMesh();
+	
+	// Create visual components (creation stays in constructor, configuration in SetupComponent)
 	WeaponMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WeaponMesh"));
 	WeaponMesh->SetupAttachment(GetMesh(), TEXT("weapon_r"));
-
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> WeaponMeshAsset(TEXT("/Game/Characters/Weapons/Staff/Staff.Staff"));
-	if (WeaponMeshAsset.Succeeded())
-	{
-		WeaponMesh->SetStaticMesh(WeaponMeshAsset.Object);
-		WeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		WeaponMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
-	}
-}
-
-void AMyProjectCharacter::InitializeAnimations()
-{
-	static ConstructorHelpers::FClassFinder<UAnimInstance> AnimBPClass(TEXT("/Game/Characters/Mannequins/Animations/ABP.ABP_C"));
-	if (AnimBPClass.Succeeded())
-	{
-		GetMesh()->SetAnimInstanceClass(AnimBPClass.Class);
-	}
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartFMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_F_Montage.Start_F_Montage"));
-	if (StartFMontageAsset.Succeeded()) StartFMontage = StartFMontageAsset.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> StartRMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Locomotion/Start/Start_R_Montage.Start_R_Montage"));
-	if (StartRMontageAsset.Succeeded()) StartRMontage = StartRMontageAsset.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> AttackMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Attack/Attack_Montage.Attack_Montage"));
-	if (AttackMontageAsset.Succeeded()) FirstAttackMontage = AttackMontageAsset.Object;
-
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> SecondAttackMontageAsset(TEXT("/Game/Characters/Mannequins/Animations/Attack/Second_Attack_Montage.Second_Attack_Montage"));
-	if (SecondAttackMontageAsset.Succeeded()) SecondAttackMontage = SecondAttackMontageAsset.Object;
-}
-
-void AMyProjectCharacter::InitializeInput()
-{
-	static ConstructorHelpers::FObjectFinder<UInputMappingContext> ContextFinder(TEXT("/Game/ThirdPerson/Input/IMC_Default.IMC_Default"));
-	if (ContextFinder.Succeeded()) DefaultMappingContext = ContextFinder.Object;
-
-	static ConstructorHelpers::FObjectFinder<UInputAction> JumpInputActionAsset(TEXT("/Game/ThirdPerson/Input/Actions/IA_Jump.IA_Jump"));
-	if (JumpInputActionAsset.Succeeded()) JumpAction = JumpInputActionAsset.Object;
-
-	static ConstructorHelpers::FObjectFinder<UInputAction> RollInputActionAsset(TEXT("/Game/ThirdPerson/Input/Actions/IA_Roll.IA_Roll"));
-	if (RollInputActionAsset.Succeeded()) RollAction = RollInputActionAsset.Object;
-
-	// For now, use the same action as Roll for Dodge (can be changed to a separate action later)
-	static ConstructorHelpers::FObjectFinder<UInputAction> DodgeInputActionAsset(TEXT("/Game/ThirdPerson/Input/Actions/IA_Roll.IA_Roll"));
-	if (DodgeInputActionAsset.Succeeded()) DodgeAction = DodgeInputActionAsset.Object;
-}
-
-void AMyProjectCharacter::InitializeMovement()
-{
-	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-	bUseControllerRotationPitch = false;
-	bUseControllerRotationYaw = false;
-	bUseControllerRotationRoll = false;
-
-	UCharacterMovementComponent* MoveComp = GetCharacterMovement();
-	MoveComp->bOrientRotationToMovement = true;
-	MoveComp->bAllowPhysicsRotationDuringAnimRootMotion = false;
-	MoveComp->RotationRate = FRotator(0.0f, 400.0f, 0.0f);
-	MoveComp->JumpZVelocity = 700.f;
-	MoveComp->AirControl = 0.35f;
-	MoveComp->MaxWalkSpeed = 500.f;
-	MoveComp->MinAnalogWalkSpeed = 20.f;
-	MoveComp->GroundFriction = 0.1;
-	MoveComp->BrakingDecelerationWalking = 1000;
-	MoveComp->BrakingDecelerationFalling = 1500.0f;
-	MoveComp->bUseFlatBaseForFloorChecks = true;
-}
-
-void AMyProjectCharacter::InitializeCamera()
-{
+	
+	// Create camera hierarchy
 	CameraRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CameraRoot"));
 	CameraRoot->SetupAttachment(RootComponent);
 	CameraRoot->SetUsingAbsoluteRotation(true);
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(CameraRoot);
-	CameraBoom->TargetArmLength = 900.0f;
-	CameraBoom->bDoCollisionTest = false;
-	CameraBoom->bUsePawnControlRotation = false;
-	CameraBoom->bInheritYaw = false;
-	CameraBoom->bInheritPitch = false;
-	CameraBoom->bInheritRoll = false;
-	CameraBoom->bEnableCameraLag = false;
-	CameraBoom->bEnableCameraRotationLag = false;
-	CameraBoom->SetRelativeRotation(FRotator(-30.f, 0.f, 0.f));
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
-	FollowCamera->bUsePawnControlRotation = false;
-}
-
-void AMyProjectCharacter::InitializeProjectileSpawnPoint()
-{
+	
 	ProjectileSpawnPoint = CreateDefaultSubobject<UArrowComponent>(TEXT("ProjectileSpawnPoint"));
 	ProjectileSpawnPoint->SetupAttachment(RootComponent);
-	ProjectileSpawnPoint->SetRelativeLocation(FVector(100.0f, 0.0f, 50.0f));
-	ProjectileSpawnPoint->SetRelativeRotation(FRotator(0.0f, 0.0f, 0.0f));
-	ProjectileSpawnPoint->bHiddenInGame = false;
+
+	// Replication already enabled at start of constructor
+	InputHandler = CreateDefaultSubobject<UCharacterInput>(TEXT("InputHandler"));
+	GestureRecognizer = CreateDefaultSubobject<UMyGestureRecognizer>(TEXT("GestureRecognizer"));
+	AnimationComponent = CreateDefaultSubobject<UCharacterAnimationComponent>(TEXT("AnimationComponent"));
+	CombatComponent = CreateDefaultSubobject<UCombatComponent>(TEXT("CombatComponent"));
+	RotationSmoothingComponent = CreateDefaultSubobject<URotationSmoothingComponent>(TEXT("RotationSmoothingComponent"));
+	ProjectileSpawnerComponent = CreateDefaultSubobject<UProjectileSpawnerComponent>(TEXT("ProjectileSpawnerComponent"));
+	StatsComponent = CreateDefaultSubobject<UCharacterStatsComponent>(TEXT("StatsComponent"));
+	
+	// ===== EVENT BINDING =====
+	// Event bindings must happen in constructor before BeginPlay
+	
+	if (RotationSmoothingComponent && ProjectileSpawnerComponent)
+	{
+		RotationSmoothingComponent->OnRotationOffsetChanged.AddDynamic(this, &AMyProjectCharacter::HandleRotationOffsetChanged);
+	}
+	GestureRecognizer->OnGestureRecognized.AddDynamic(this, &AMyProjectCharacter::HandleGesture);
+	
+	if (StatsComponent)
+	{
+		StatsComponent->OnDied.AddDynamic(this, &AMyProjectCharacter::HandleDeath);
+	}
+	
+	// Kept for input initialization (input setup is separate from visual setup)
+	InitializeInput();
+	
+	// Load projectile class and UI from config
+	if (CharacterConfig)
+	{
+		ProjectileClass = CharacterConfig->ProjectileClass;
+		CharacterStatsWidgetClass = CharacterConfig->StatsWidgetClass;
+		
+		// Set melee combat parameters on CombatComponent
+		if (CombatComponent)
+		{
+			CombatComponent->MeleeDamage = CharacterConfig->MeleeDamage;
+			CombatComponent->MeleeRange = CharacterConfig->MeleeRange;
+		}
+	}
+	else
+	{
+		// Fallback to defaults if no config
+		ProjectileClass = AMageProjectile::StaticClass();
+		
+		static ConstructorHelpers::FClassFinder<UUserWidget> StatsWidgetBP(TEXT("/Game/UI/CharacterStats.CharacterStats_C"));
+		if (StatsWidgetBP.Succeeded())
+		{
+			CharacterStatsWidgetClass = StatsWidgetBP.Class;
+		}
+	}
+}
+
+void AMyProjectCharacter::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+	
+	UE_LOG(LogTemp, Log, TEXT("PostInitializeComponents: Calling SetupComponent to initialize character..."));
+	
+	// NEW CODE: Use setup component to configure all visual and movement components
+	if (SetupComponent)
+	{
+		SetupComponent->InitializeCharacter(this);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("PostInitializeComponents: SetupComponent is NULL!"));
+	}
+	
+	// Capsule collision setup (moved from constructor)
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	
+	// AnimationComponent initialization now handled by SetupComponent
+}
+
+void AMyProjectCharacter::InitializeMesh()
+{
+	// Setup mesh transform FIRST (before setting skeletal mesh)
+	USkeletalMeshComponent* MeshComp = GetMesh();
+	if (!MeshComp)
+	{
+		UE_LOG(LogTemp, Error, TEXT("InitializeMesh: No mesh component!"));
+		return;
+	}
+	
+	// Set transform
+	MeshComp->SetRelativeLocation(FVector(0.0f, 0.0f, -90.0f));
+	MeshComp->SetRelativeRotation(FRotator(0.0f, 270.0f, 0.0f));
+	
+	// Set collision
+	MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MeshComp->SetCollisionResponseToAllChannels(ECR_Ignore);
+	
+	// Load and set mesh from config (if available)
+	if (CharacterConfig)
+	{
+		// Load skeletal mesh
+		if (!CharacterConfig->CharacterMesh.IsNull())
+		{
+			USkeletalMesh* LoadedMesh = CharacterConfig->CharacterMesh.LoadSynchronous();
+			if (LoadedMesh)
+			{
+				MeshComp->SetSkeletalMesh(LoadedMesh);
+				UE_LOG(LogTemp, Log, TEXT("InitializeMesh: Skeletal mesh loaded from config"));
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("InitializeMesh: Failed to load skeletal mesh"));
+			}
+		}
+		
+		// Set animation blueprint
+		if (CharacterConfig->AnimationBlueprint)
+		{
+			MeshComp->SetAnimInstanceClass(CharacterConfig->AnimationBlueprint);
+			UE_LOG(LogTemp, Log, TEXT("InitializeMesh: Animation blueprint set from config"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("InitializeMesh: CharacterConfig is NULL - mesh not loaded"));
+	}
+}
+
+void AMyProjectCharacter::InitializeInput()
+{
+	if (!CharacterConfig)
+	{
+		UE_LOG(LogTemp, Error, TEXT("CharacterConfig is not set! Cannot initialize input."));
+		return;
+	}
+	
+	// Load input assets from config
+	if (!CharacterConfig->DefaultMappingContext.IsNull())
+	{
+		DefaultMappingContext = CharacterConfig->DefaultMappingContext.LoadSynchronous();
+	}
+	
+	if (!CharacterConfig->JumpAction.IsNull())
+	{
+		JumpAction = CharacterConfig->JumpAction.LoadSynchronous();
+	}
+	
+	if (!CharacterConfig->RollAction.IsNull())
+	{
+		RollAction = CharacterConfig->RollAction.LoadSynchronous();
+	}
+	
+	if (!CharacterConfig->DodgeAction.IsNull())
+	{
+		DodgeAction = CharacterConfig->DodgeAction.LoadSynchronous();
+	}
 }
 
 void AMyProjectCharacter::PossessAIController(UClass* _AIControllerClass)
@@ -194,18 +246,22 @@ void AMyProjectCharacter::PossessAIController(UClass* _AIControllerClass)
 	}
 }
 
-bool AMyProjectCharacter::GetIsPlayerTryingToMove()
+// ========= Network Component Wrappers (Backward Compatibility) =========
+
+bool AMyProjectCharacter::GetIsPlayerTryingToMove() const
 {
-	return IsPlayerTryingToMove;
+	return NetworkComponent ? NetworkComponent->GetIsPlayerTryingToMove() : false;
 }
 
-void AMyProjectCharacter::SetIsPlayerTryingToMove(bool value)
+void AMyProjectCharacter::SetIsPlayerTryingToMove(bool bValue)
 {
-	if (IsLocallyControlled())
+	if (NetworkComponent)
 	{
-		ServerSetIsPlayerTryingToMove(value);
+		NetworkComponent->SetIsPlayerTryingToMove(bValue);
 	}
 }
+
+// ========= Movement Functions =========
 
 void AMyProjectCharacter::SetAllowPhysicsRotationDuringAnimRootMotion(bool value)
 {
@@ -273,18 +329,31 @@ float AMyProjectCharacter::GetLookRotation()
 void AMyProjectCharacter::SetIsAttackEnding(bool value) { if (CombatComponent) CombatComponent->SetIsAttackEnding(value); }
 void AMyProjectCharacter::SetIsSecondAttackWindowOpen(bool value)
 {
-	// Only server mutates the CombatComponent state. Only owning client is allowed to ask.
-	if (HasAuthority())
+	if (NetworkComponent)
 	{
-		if (CombatComponent) CombatComponent->SetIsSecondAttackWindowOpen(value);
-		return;
+		NetworkComponent->SetSecondAttackWindow(value);
 	}
-	// Reject calls from simulated proxies (no owning connection)
-	if (!IsLocallyControlled())
+}
+
+void AMyProjectCharacter::SetIsAttacking(bool value)
+{
+	if (CombatComponent)
 	{
-		return;
+		CombatComponent->bIsAttacking = value;
 	}
-	ServerSetSecondAttackWindow(value);
+}
+
+void AMyProjectCharacter::DetectHit()
+{
+	// Delegate to CombatComponent for hit detection
+	if (CombatComponent)
+	{
+		CombatComponent->DetectHit();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("DetectHit: CombatComponent is null!"));
+	}
 }
 
 void AMyProjectCharacter::FireProjectile()
@@ -416,8 +485,30 @@ void AMyProjectCharacter::BeginPlay()
 		CharacterStatsWidget = CreateWidget<UUserWidget>(PC, CharacterStatsWidgetClass);
 		if (CharacterStatsWidget)
 		{
+			// Bind the StatsComponent to the widget's CharacterStats property
+			if (StatsComponent)
+			{
+				FProperty* Property = CharacterStatsWidget->GetClass()->FindPropertyByName(FName("CharacterStats"));
+				if (Property)
+				{
+					FObjectProperty* ObjectProperty = CastField<FObjectProperty>(Property);
+					if (ObjectProperty)
+					{
+						void* PropertyAddress = Property->ContainerPtrToValuePtr<void>(CharacterStatsWidget);
+						ObjectProperty->SetObjectPropertyValue(PropertyAddress, StatsComponent);
+					}
+				}
+			}
 			CharacterStatsWidget->AddToViewport();
 		}
+	}
+	
+	// Bind to animation events
+	if (AnimationComponent)
+	{
+		AnimationComponent->OnAnimationComplete.AddDynamic(this, &AMyProjectCharacter::HandleAnimationComplete);
+		AnimationComponent->OnAnimationStarted.AddDynamic(this, &AMyProjectCharacter::HandleAnimationStarted);
+		UE_LOG(LogTemp, Log, TEXT("BeginPlay: Bound to AnimationComponent events"));
 	}
 }
 
@@ -555,9 +646,8 @@ void AMyProjectCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	// Replicate variables
-	DOREPLIFETIME(AMyProjectCharacter, IsPlayerTryingToMove);
-	// (Stats handled inside UCharacterStatsComponent)
+	// Network replication now handled by UCharacterNetworkComponent
+	// Stats handled inside UCharacterStatsComponent
 }
 
 void AMyProjectCharacter::OnSwipeStarted(ETouchIndex::Type FingerIndex, FVector Location)
@@ -602,7 +692,10 @@ void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 	{
 		std::random_device rd; std::mt19937 gen(rd()); std::uniform_real_distribution<float> dis(-90.f, 90.f);
 		const float Angle = dis(gen);
-		if (HasAuthority()) MulticastStartAttack(Angle); else ServerStartAttack(Angle);
+		if (NetworkComponent)
+		{
+			NetworkComponent->TriggerAttack(Angle);
+		}
 	}
 }
 
@@ -678,13 +771,28 @@ void AMyProjectCharacter::OnDodge()
 
 void AMyProjectCharacter::SwitchToWalking()
 {
-	GetCharacterMovement()->MaxWalkSpeed = 200.f;
+	if (CharacterConfig)
+	{
+		GetCharacterMovement()->MaxWalkSpeed = CharacterConfig->WalkSpeed;
+	}
+	else
+	{
+		GetCharacterMovement()->MaxWalkSpeed = 200.f; // Fallback
+	}
 }
 
 void AMyProjectCharacter::SwitchToRunning()
 {
 	SmoothlyRotate(0, 10);
-	GetCharacterMovement()->MaxWalkSpeed = 500.f;
+	
+	if (CharacterConfig)
+	{
+		GetCharacterMovement()->MaxWalkSpeed = CharacterConfig->RunSpeed;
+	}
+	else
+	{
+		GetCharacterMovement()->MaxWalkSpeed = 500.f; // Fallback
+	}
 }
 
 void AMyProjectCharacter::SetMovementVector(FVector2D _MovementVector)
@@ -692,20 +800,7 @@ void AMyProjectCharacter::SetMovementVector(FVector2D _MovementVector)
 	MovementVector = _MovementVector;
 }
 
-void AMyProjectCharacter::ServerSetIsPlayerTryingToMove_Implementation(bool NewIsPlayerTryingToMove)
-{
-	IsPlayerTryingToMove = NewIsPlayerTryingToMove;
-}
-
-// Dodge RPC wrappers removed (handled in component)
-
-void AMyProjectCharacter::ServerStartAttack_Implementation(float angle)
-{
-	MulticastStartAttack(angle);
-}
-
-void AMyProjectCharacter::MulticastStartAttack_Implementation(float angle) { SmoothlyRotate(angle, 1); if (CombatComponent) CombatComponent->StartAttack(); }
-
+// Attack & Dodge RPC wrappers removed (handled in NetworkComponent)
 // StartDodge wrapper removed.
 // Callback when rotation offset changes
 void AMyProjectCharacter::HandleRotationOffsetChanged(float NewOffset)
@@ -721,11 +816,6 @@ void AMyProjectCharacter::HandleRotationOffsetChanged(float NewOffset)
 		ProjectileSpawnPoint->SetRelativeRotation(FRotator(0.f, -NewOffset, 0.f));
 		ProjectileSpawnPoint->SetRelativeLocation(FVector(100.f * FMath::Sin(Rad), 100.f * FMath::Cos(Rad), 50.f));
 	}
-}
-
-void AMyProjectCharacter::ServerSetSecondAttackWindow_Implementation(bool bOpen)
-{
-	if (CombatComponent) CombatComponent->SetIsSecondAttackWindowOpen(bOpen);
 }
 
 // ========= Stats Integration =========
@@ -757,4 +847,35 @@ void AMyProjectCharacter::Heal(float Amount)
 bool AMyProjectCharacter::IsAlive() const
 {
 	return StatsComponent ? StatsComponent->IsAlive() : false;
+}
+
+// ========= Animation Event Handlers =========
+void AMyProjectCharacter::HandleAnimationComplete(FName AnimationName)
+{
+	UE_LOG(LogTemp, Log, TEXT("Animation completed: %s"), *AnimationName.ToString());
+	
+	// React to specific animations
+	if (AnimationName == TEXT("FirstAttack"))
+	{
+		// First attack finished, ready for next action
+		if (CombatComponent)
+		{
+			// Notify combat component that attack animation finished
+			UE_LOG(LogTemp, Log, TEXT("First attack animation finished"));
+		}
+	}
+	else if (AnimationName == TEXT("SecondAttack"))
+	{
+		// Combo finished
+		if (CombatComponent)
+		{
+			// Notify combat component that combo finished
+			UE_LOG(LogTemp, Log, TEXT("Second attack animation finished"));
+		}
+	}
+}
+
+void AMyProjectCharacter::HandleAnimationStarted(FName AnimationName)
+{
+	UE_LOG(LogTemp, Log, TEXT("Animation started: %s"), *AnimationName.ToString());
 }

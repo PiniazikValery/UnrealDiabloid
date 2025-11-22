@@ -15,15 +15,22 @@ class MYPROJECT_API AEnemyCharacter : public AMyProjectCharacter
 	GENERATED_BODY()
 
 public:
+	AEnemyCharacter(const FObjectInitializer& ObjectInitializer);
 	UFUNCTION(BlueprintCallable, Category = "Enemy")
 	void SetEnemyType(EEnemyType NewType);
 
 	UFUNCTION(BlueprintPure, Category = "Enemy")
 	EEnemyType GetEnemyType() const { return EnemyType; }
 
+	UFUNCTION(BlueprintCallable, Category = "Enemy")
+	void PlayZombieAttack();
+
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Enemy")
 	EEnemyType EnemyType = EEnemyType::E_None;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Enemy|Animation")
+	UAnimMontage* ZombieAttackMontage;
 
 	void ConfigureEnemyByType();
 };

@@ -33,6 +33,8 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	FVector Velocity;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
+	bool HasVelocity;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float GroundSpeed;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float MaxSpeed;
@@ -42,6 +44,8 @@ protected:
 	bool IsFalling;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	bool IsAccelerating;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
+	bool HasAcceleration;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
 	float Direction;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Animation Properties")
@@ -80,10 +84,14 @@ protected:
 	float LookRotation = 0.f;
 
 private:
+	// Smoothing timer to prevent HasAcceleration flickering
+	float AccelerationSmoothTimer = 0.f;
+	float AccelerationSmoothDelay = 0.15f; // Delay before setting to false
+
 	void CalculateDistanceTraveled();
 	void CalculateDirection();
 	void SetDodgeProperties();
 	void SetMomentumProperties();
-	void SetMovementProperties();
+	void SetMovementProperties(float DeltaSeconds);
 	void SetMovementInput();
 };
