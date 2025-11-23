@@ -16,6 +16,9 @@ class MYPROJECT_API AEnemyCharacter : public AMyProjectCharacter
 
 public:
 	AEnemyCharacter(const FObjectInitializer& ObjectInitializer);
+	
+	virtual void BeginPlay() override;
+	
 	UFUNCTION(BlueprintCallable, Category = "Enemy")
 	void SetEnemyType(EEnemyType NewType);
 
@@ -24,6 +27,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Enemy")
 	void PlayZombieAttack();
+
+	// Override death handling for enemies
+	virtual void HandleDeath() override;
 
 protected:
 	UPROPERTY(VisibleAnywhere, Category = "Enemy")

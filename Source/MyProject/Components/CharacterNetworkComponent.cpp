@@ -97,7 +97,7 @@ void UCharacterNetworkComponent::MulticastStartAttack_Implementation(float Angle
 	}
 
 	// Apply rotation and start attack
-	OwnerCharacter->SmoothlyRotate(Angle, 1);
+	OwnerCharacter->SmoothlyRotate(Angle, 10);
 	
 	if (UCombatComponent* CombatComp = OwnerCharacter->GetCombatComponent())
 	{

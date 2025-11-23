@@ -30,9 +30,15 @@ void UProjectileSpawnerComponent::BeginPlay()
 void UProjectileSpawnerComponent::UpdateFromRotationOffset(float OffsetDegrees)
 {
     if (!SpawnPoint) return;
-    const float Rad = FMath::DegreesToRadians(OffsetDegrees + 90.f);
-    SpawnPoint->SetRelativeRotation(FRotator(0.f, -OffsetDegrees, 0.f));
-    SpawnPoint->SetRelativeLocation(FVector(100.f * FMath::Sin(Rad), 100.f * FMath::Cos(Rad), 50.f));
+    
+    // Convert angle to radians for position calculation
+    // In Unreal: 0° = Forward (+X), 90° = Right (+Y)
+    // Formula: X = Cos(angle), Y = Sin(angle)
+    const float Rad = FMath::DegreesToRadians(OffsetDegrees);
+    const float Radius = 100.f;
+    
+    SpawnPoint->SetRelativeRotation(FRotator(0.f, OffsetDegrees, 0.f));
+    SpawnPoint->SetRelativeLocation(FVector(Radius * FMath::Cos(Rad), Radius * FMath::Sin(Rad), 50.f));
 }
 
 void UProjectileSpawnerComponent::SpawnProjectile(TSubclassOf<AMageProjectile> ProjectileClass, AActor* OwnerActor)

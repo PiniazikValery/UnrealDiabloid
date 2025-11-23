@@ -1,6 +1,8 @@
 ﻿// Fill out your copyright notice in the Description page of Project Settings.
 
 #include "MageProjectile.h"
+#include "../EnemyCharacter.h"
+#include "Engine/DamageEvents.h"
 
 // Sets default values
 AMageProjectile::AMageProjectile()
@@ -97,7 +99,14 @@ void AMageProjectile::OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UP
 	// Check if the projectile hit a valid target (not itself)
 	if (OtherActor && OtherActor != this && OtherComp)
 	{
-		// Optionally apply damage or other effects here
+		// Check if we hit an enemy character
+		AEnemyCharacter* EnemyCharacter = Cast<AEnemyCharacter>(OtherActor);
+		if (EnemyCharacter)
+		{
+			// Apply damage to the enemy
+			FDamageEvent DamageEvent;
+			EnemyCharacter->TakeDamage(ProjectileDamage, DamageEvent, nullptr, this);
+		}
 
 		// Destroy the projectile
 		Destroy();

@@ -35,6 +35,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components")
 	UProjectileMovementComponent* ProjectileMovement;
 
+	// Damage dealt by the projectile
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float ProjectileDamage = 15.0f;
+
 private:
 	UFUNCTION()
 	void OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);

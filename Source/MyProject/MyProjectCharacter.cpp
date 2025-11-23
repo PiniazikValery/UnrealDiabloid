@@ -690,8 +690,44 @@ void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 	}
 	else if (Gesture == EGestureType::None)
 	{
-		std::random_device rd; std::mt19937 gen(rd()); std::uniform_real_distribution<float> dis(-90.f, 90.f);
-		const float Angle = dis(gen);
+		float Angle = 0.f;
+		
+		// Use AutoAimHelper to find target
+		if (bEnableAutoAim)
+		{	
+			FAutoAimResult AimResult = UAutoAimHelper::FindBestTargetAndAngle(
+				this,
+				AEnemyCharacter::StaticClass(),
+				AutoAimRange,
+				AutoAimMaxAngle,
+				AutoAimMode
+			);
+			
+			if (AimResult.bTargetFound)
+			{
+				Angle = AimResult.AimAngle;
+				
+				// Calculate relative position for verification
+				FVector RelativePos = AimResult.Target->GetActorLocation() - GetActorLocation();
+			}
+			else
+			{
+				// Fallback to random angle
+				std::random_device rd;
+				std::mt19937 gen(rd());
+				std::uniform_real_distribution<float> dis(-AutoAimMaxAngle, AutoAimMaxAngle);
+				Angle = dis(gen);
+			}
+		}
+		else
+		{
+			// Auto-aim disabled
+			std::random_device rd;
+			std::mt19937 gen(rd());
+			std::uniform_real_distribution<float> dis(-AutoAimMaxAngle, AutoAimMaxAngle);
+			Angle = dis(gen);
+		}
+		
 		if (NetworkComponent)
 		{
 			NetworkComponent->TriggerAttack(Angle);

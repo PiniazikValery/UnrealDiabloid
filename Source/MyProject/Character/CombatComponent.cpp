@@ -1049,6 +1049,8 @@ void UCombatComponent::StartAttack()
 		bool bPlayed = AnimComp->PlaySecondAttack();
 		if (bPlayed)
 		{
+			// Remove existing binding first to prevent duplicates
+			AnimComp->OnAnimationComplete.RemoveDynamic(this, &UCombatComponent::OnAttackAnimationComplete);
 			// Bind to completion event
 			AnimComp->OnAnimationComplete.AddDynamic(this, &UCombatComponent::OnAttackAnimationComplete);
 		}
@@ -1064,6 +1066,8 @@ void UCombatComponent::StartAttack()
 		bool bPlayed = AnimComp->PlayFirstAttack();
 		if (bPlayed)
 		{
+			// Remove existing binding first to prevent duplicates
+			AnimComp->OnAnimationComplete.RemoveDynamic(this, &UCombatComponent::OnAttackAnimationComplete);
 			// Bind to completion event
 			AnimComp->OnAnimationComplete.AddDynamic(this, &UCombatComponent::OnAttackAnimationComplete);
 		}

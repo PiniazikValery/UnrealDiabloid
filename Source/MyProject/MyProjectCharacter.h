@@ -14,6 +14,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Engine/TimerHandle.h"
 #include "CharacterConfigurationAsset.h"
+#include "AutoAimHelper.h"
 #include "MyProjectCharacter.generated.h"
 
 class USpringArmComponent;
@@ -213,15 +214,29 @@ private:
 	void HandleGesture(EGestureType Gesture);
 	UFUNCTION()
 	void HandleRotationOffsetChanged(float NewOffset);
-	// Stats death handler
-	UFUNCTION()
-	void HandleDeath();
 	// Animation event handlers
 	UFUNCTION()
 	void HandleAnimationComplete(FName AnimationName);
 	UFUNCTION()
 	void HandleAnimationStarted(FName AnimationName);
 
+protected:
+	// Auto-aim settings
+	UPROPERTY(EditAnywhere, Category = "Combat|Auto-Aim")
+	float AutoAimRange = 5000.f;
+	
+	UPROPERTY(EditAnywhere, Category = "Combat|Auto-Aim")
+	float AutoAimMaxAngle = 90.f;
+	
+	UPROPERTY(EditAnywhere, Category = "Combat|Auto-Aim")
+	bool bEnableAutoAim = true;
+	
+	UPROPERTY(EditAnywhere, Category = "Combat|Auto-Aim")
+	ETargetSelectionMode AutoAimMode = ETargetSelectionMode::ClosestToCenter;
+
+	// Stats death handler - protected so derived classes can override
+	UFUNCTION()
+	virtual void HandleDeath();
 
 public: // ========= Stats Component =========
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")

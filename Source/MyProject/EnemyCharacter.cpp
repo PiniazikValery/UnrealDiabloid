@@ -2,6 +2,7 @@
 
 
 #include "EnemyCharacter.h"
+#include "Components/CapsuleComponent.h"
 
 AEnemyCharacter::AEnemyCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -17,6 +18,11 @@ AEnemyCharacter::AEnemyCharacter(const FObjectInitializer& ObjectInitializer)
 	{
 		ZombieAttackMontage = ZombieAttackMontageAsset.Object;
 	}
+}
+
+void AEnemyCharacter::BeginPlay()
+{
+	Super::BeginPlay();
 }
 
 void AEnemyCharacter::PlayZombieAttack()
@@ -50,17 +56,29 @@ void AEnemyCharacter::ConfigureEnemyByType()
 	switch (EnemyType)
 	{
 		case EEnemyType::E_Melee:
-			GetCharacterMovement()->MaxWalkSpeed = 550.f;
+			GetCharacterMovement()->MaxWalkSpeed = 250.f;
 			// GetCharacterMovement()->GroundFriction = 10;
 			// GetCharacterMovement()->BrakingDecelerationWalking = 1000000;
 			break;
 		case EEnemyType::E_Ranged:
-			GetCharacterMovement()->MaxWalkSpeed = 550.f;
+			GetCharacterMovement()->MaxWalkSpeed = 250.f;
 			break;
 		case EEnemyType::E_Tank:
-			GetCharacterMovement()->MaxWalkSpeed = 550.f;
+			GetCharacterMovement()->MaxWalkSpeed = 250.f;
 			break;
 		default:
 			break;
 	}
+}
+
+void AEnemyCharacter::HandleDeath()
+{
+	// Call parent death handling (disables movement)
+	Super::HandleDeath();
+	
+	// Disable collision
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	
+	// Destroy the enemy after a short delay (0.1 second)
+	SetLifeSpan(0.1f);
 }
