@@ -3,6 +3,10 @@
 
 #include "HouseSpawner.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "AI/NavigationSystemBase.h"
+#include "NavigationSystem.h"
+#include "NavAreas/NavArea_Null.h"
+#include "NavBlockerActor.h"
 
 // Sets default values
 AHouseSpawner::AHouseSpawner()
@@ -22,15 +26,15 @@ AHouseSpawner::AHouseSpawner()
 	};
 	
 	const FHouseMeshPath MeshPaths[] = {
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH1.BH1'"), 1 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH2.BH2'"), 2 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH3.BH3'"), 3 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH4.BH4'"), 4 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH5.BH5'"), 5 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH6.BH6'"), 6 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH7.BH7'"), 7 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH1.BH1'"), 1 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH2.BH2'"), 2 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH3.BH3'"), 3 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH4.BH4'"), 4 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH5.BH5'"), 5 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH6.BH6'"), 6 },
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH7.BH7'"), 7 },
 		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/BH8.BH8'"), 8 },
-		{ TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/Tower.Tower'"), 9 }
+		// { TEXT("/Script/Engine.StaticMesh'/Game/Models/Houses/scene/ReadyHouses/Tower.Tower'"), 9 }
 	};
 	
 	for (const FHouseMeshPath& MeshPath : MeshPaths)
@@ -65,9 +69,16 @@ void AHouseSpawner::BeginPlay()
 			UInstancedStaticMeshComponent* InstancedMesh = NewObject<UInstancedStaticMeshComponent>(this);
 			InstancedMesh->SetStaticMesh(HouseMeshes[i]);
 			InstancedMesh->SetupAttachment(RootComponent);
+			
+			// Enable these to fill the collision volume and remove navmesh inside/underneath
+			InstancedMesh->bFillCollisionUnderneathForNavmesh = true;
+			
+			// This is KEY - treats the collision as a solid volume for nav purposes
+			InstancedMesh->SetCanEverAffectNavigation(true);
+			
 			InstancedMesh->RegisterComponent();
 			HouseInstancedMeshes.Add(InstancedMesh);
-			UE_LOG(LogTemp, Warning, TEXT("HouseSpawner::BeginPlay - Created instanced mesh %d"), i);
+			UE_LOG(LogTemp, Warning, TEXT("HouseSpawner::BeginPlay - Created instanced mesh %d (fills underneath)"), i);
 		}
 		else
 		{
@@ -227,7 +238,7 @@ void AHouseSpawner::SpawnHouseInFrontOfPlayer()
 	UE_LOG(LogTemp, Warning, TEXT("House placement - Hits: %d, Min: %.2f, Max: %.2f, Final Z: %.2f"), 
 		ValidHits, MinHeight, MaxHeight, SpawnLocation.Z);
 	
-	// Optionally align house to terrain slope
+	// Align house to terrain slope
 	if (bAlignToTerrainSlope && ValidHits > 0)
 	{
 		AverageGroundNormal.Normalize();
@@ -269,8 +280,56 @@ void AHouseSpawner::SpawnHouseInFrontOfPlayer()
 	if (HouseInstancedMeshes.IsValidIndex(RandomHouseIndex))
 	{
 		int32 InstanceIndex = HouseInstancedMeshes[RandomHouseIndex]->AddInstance(SpawnTransform);
-		UE_LOG(LogTemp, Warning, TEXT("House spawned (type %d) at: %s with index: %d"), 
+		UE_LOG(LogTemp, Warning, TEXT("House spawned (type %d) at local: %s with index: %d"), 
 			RandomHouseIndex, *SpawnLocation.ToString(), InstanceIndex);
+		
+		// Get the actual world transform of the instance
+		// AddInstance uses local space, so we need to transform by the component's world transform
+		FTransform InstanceWorldTransform;
+		HouseInstancedMeshes[RandomHouseIndex]->GetInstanceTransform(InstanceIndex, InstanceWorldTransform, true); // true = world space
+		FVector InstanceWorldLocation = InstanceWorldTransform.GetLocation();
+		
+		UE_LOG(LogTemp, Warning, TEXT("House instance world location: %s"), *InstanceWorldLocation.ToString());
+		
+		// Get mesh bounds for nav blocker
+		FBox MeshBounds = HouseInstancedMeshes[RandomHouseIndex]->GetStaticMesh()->GetBoundingBox();
+		
+		// Use the mesh extent scaled only (not rotated) - this gives the actual mesh dimensions
+		// TransformBy creates an axis-aligned box around the rotated mesh which is much larger
+		FVector MeshExtent = MeshBounds.GetExtent() * RandomScale;
+		FVector MeshCenter = MeshBounds.GetCenter() * RandomScale;
+		
+		// Calculate world center by transforming the mesh center by the instance world transform
+		FVector WorldCenter = InstanceWorldTransform.TransformPosition(MeshBounds.GetCenter());
+		
+		// Spawn a NavBlocker actor covering the ENTIRE house (inside + roof)
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Owner = this;
+		
+		// NavBlocker fills cubes then removes ones outside the mesh
+		ANavBlockerActor* NavBlocker = GetWorld()->SpawnActor<ANavBlockerActor>(
+			ANavBlockerActor::StaticClass(),
+			WorldCenter,
+			SpawnRotation,  // Full rotation to match house
+			SpawnParams
+		);
+		
+		if (NavBlocker)
+		{
+			// Use mesh-based filling - pass the actual WORLD location where the house instance is placed
+			UStaticMesh* HouseMesh = HouseInstancedMeshes[RandomHouseIndex]->GetStaticMesh();
+			NavBlocker->SetBlockingExtentFromMesh(MeshExtent, HouseMesh, RandomScale, InstanceWorldLocation);
+			UE_LOG(LogTemp, Warning, TEXT("NavBlocker spawned at center: %s, extent: %s, houseWorldLocation: %s, rotation: %s"), 
+				*WorldCenter.ToString(), *MeshExtent.ToString(), *InstanceWorldLocation.ToString(), *SpawnRotation.ToString());
+		}
+		
+		// Update navigation after spawning - force navmesh rebuild in the affected area
+		UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
+		if (NavSys)
+		{
+			FBox InstanceBounds = MeshBounds.TransformBy(SpawnTransform);
+			NavSys->AddDirtyArea(InstanceBounds, ENavigationDirtyFlag::All);
+		}
 	}
 	else
 	{

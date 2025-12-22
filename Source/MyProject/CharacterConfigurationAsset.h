@@ -158,7 +158,9 @@ public:
 	 * Validate that all required assets are set
 	 * Called in editor to help catch configuration errors early
 	 */
+	#if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	#endif
 
 #if WITH_EDITOR
 	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;

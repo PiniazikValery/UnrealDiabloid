@@ -206,8 +206,13 @@ void AMyProjectGameMode::SpawnEnemySpawner()
 		SpawnParams.Owner = this;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-		AAEnemySpawner* Spawner = World->SpawnActor<AAEnemySpawner>(
-			AAEnemySpawner::StaticClass(), SpawnLocation, SpawnRotation, SpawnParams);
+		AMassEnemySpawner* Spawner = World->SpawnActor<AMassEnemySpawner>(
+			AMassEnemySpawner::StaticClass(), SpawnLocation, SpawnRotation, SpawnParams);
+		
+		if (Spawner)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Mass Enemy Spawner created successfully!"));
+		}
 	}
 }
 

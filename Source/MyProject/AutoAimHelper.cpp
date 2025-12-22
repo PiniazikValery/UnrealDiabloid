@@ -22,7 +22,6 @@ FAutoAimResult UAutoAimHelper::FindBestTargetAndAngle(
 	
 	if (!SourceActor || !SourceActor->GetWorld())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("AutoAimHelper: Invalid SourceActor"));
 		return Result;
 	}
 	
@@ -42,7 +41,6 @@ FAutoAimResult UAutoAimHelper::FindBestTargetAndAngle(
 	
 	if (PotentialTargets.Num() == 0)
 	{
-		UE_LOG(LogTemp, Log, TEXT("AutoAimHelper: No targets found in range"));
 		return Result;
 	}
 	
@@ -52,8 +50,6 @@ FAutoAimResult UAutoAimHelper::FindBestTargetAndAngle(
 	float BestAngle = 0.f;
 	
 	const FVector SourceLocation = SourceActor->GetActorLocation();
-	
-	UE_LOG(LogTemp, Warning, TEXT("AutoAimHelper: Evaluating %d potential targets"), PotentialTargets.Num());
 	
 	for (AActor* Target : PotentialTargets)
 	{
@@ -67,7 +63,6 @@ FAutoAimResult UAutoAimHelper::FindBestTargetAndAngle(
 		float ArcCheckAngle = 0.f;
 		if (!IsTargetInFrontArc(SourceActor, TargetLocation, MaxAngleDegrees, ArcCheckAngle))
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Target %s rejected - outside arc"), *Target->GetName());
 			continue;
 		}
 		
@@ -89,9 +84,6 @@ FAutoAimResult UAutoAimHelper::FindBestTargetAndAngle(
 		Result.AimAngle = BestAngle;
 		Result.DistanceToTarget = FVector::Dist(SourceLocation, BestTarget->GetActorLocation());
 		Result.bTargetFound = true;
-		
-		UE_LOG(LogTemp, Log, TEXT("AutoAimHelper: Best target found at angle %f, distance %f"),
-			Result.AimAngle, Result.DistanceToTarget);
 	}
 	
 	return Result;
@@ -119,32 +111,13 @@ float UAutoAimHelper::CalculateAimAngleToTarget(AActor* SourceActor, AActor* Tar
 	float ForwardAtan2 = FMath::Atan2(SourceForward.Y, SourceForward.X);
 	float RawAngleDegrees = FMath::RadiansToDegrees(TargetAtan2 - ForwardAtan2);
 	
-	// Debug logging
-	UE_LOG(LogTemp, Warning, TEXT("===== AUTO-AIM ANGLE CALCULATION ====="));
-	UE_LOG(LogTemp, Warning, TEXT("Source: %s"), *SourceActor->GetName());
-	UE_LOG(LogTemp, Warning, TEXT("Target: %s"), *Target->GetName());
-	UE_LOG(LogTemp, Warning, TEXT("SourceLocation: %s"), *SourceLocation.ToString());
-	UE_LOG(LogTemp, Warning, TEXT("TargetLocation: %s"), *TargetLocation.ToString());
-	UE_LOG(LogTemp, Warning, TEXT("SourceRotation: %s"), *SourceRotation.ToString());
-	UE_LOG(LogTemp, Warning, TEXT("SourceForward: %s"), *SourceForward.ToString());
-	UE_LOG(LogTemp, Warning, TEXT("DirectionToTarget: %s"), *DirectionToTarget.ToString());
-	UE_LOG(LogTemp, Warning, TEXT("Target Atan2: %f rad (%f deg)"), TargetAtan2, FMath::RadiansToDegrees(TargetAtan2));
-	UE_LOG(LogTemp, Warning, TEXT("Forward Atan2: %f rad (%f deg)"), ForwardAtan2, FMath::RadiansToDegrees(ForwardAtan2));
-	UE_LOG(LogTemp, Warning, TEXT("Raw Angle (before normalization): %f"), RawAngleDegrees);
-	
 	// Normalize to -180 to 180 range
 	float AngleDegrees = RawAngleDegrees;
 	while (AngleDegrees > 180.f) AngleDegrees -= 360.f;
 	while (AngleDegrees < -180.f) AngleDegrees += 360.f;
 	
-	UE_LOG(LogTemp, Warning, TEXT("Normalized Angle: %f"), AngleDegrees);
-	
 	// Mirror the angle by negating it
 	float MirroredAngle = -AngleDegrees;
-	
-	UE_LOG(LogTemp, Warning, TEXT("Angle before mirroring: %f"), AngleDegrees);
-	UE_LOG(LogTemp, Warning, TEXT("Angle after mirroring: %f"), MirroredAngle);
-	UE_LOG(LogTemp, Warning, TEXT("======================================"));
 	
 	// Return mirrored angle
 	return MirroredAngle;

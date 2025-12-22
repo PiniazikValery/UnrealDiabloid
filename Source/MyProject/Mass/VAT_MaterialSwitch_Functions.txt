@@ -1,0 +1,153 @@
+// ===========================================================================
+// ADD THESE FUNCTION DECLARATIONS TO EnemyVisualizationProcessor.h
+// In the "VAT/ISM MANAGEMENT" section, add:
+// ===========================================================================
+
+\tint32 AcquireVATInstance_Idle(const FTransform& Transform, const FEnemyVisualizationFragment& VisFragment);
+\tint32 AcquireVATInstance_Walk(const FTransform& Transform, const FEnemyVisualizationFragment& VisFragment);
+
+// Update BatchUpdateVATInstances signature to:
+\tvoid BatchUpdateVATInstances(
+\t\tUHierarchicalInstancedStaticMeshComponent* ISM,
+\t\tconst TArray<FTransform>& Transforms, 
+\t\tconst TArray<int32>& Indices, 
+\t\tconst TArray<FVector4>& CustomData);
+
+// ===========================================================================
+// ADD THESE FUNCTION IMPLEMENTATIONS TO EnemyVisualizationProcessor.cpp
+// After the existing AcquireVATInstance function:
+// ===========================================================================
+
+int32 UEnemyVisualizationProcessor::AcquireVATInstance_Idle(const FTransform& Transform, const FEnemyVisualizationFragment& VisFragment)
+{
+	if (!VATISM_Idle || !VATISM_Idle->IsValidLowLevel())
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			InitializeVATSystem(World);
+		}
+
+		if (!VATISM_Idle)
+			return INDEX_NONE;
+	}
+
+	int32 InstanceIndex = INDEX_NONE;
+
+	// Adjust transform for static mesh mannequin
+	FTransform CubeTransform = Transform;
+	FVector	   Location = Transform.GetLocation();
+	Location.Z -= 88.0f; // Match skeletal mesh offset
+	CubeTransform.SetLocation(Location);
+	
+	// Rotate to match skeletal mesh orientation
+	FRotator Rotation = CubeTransform.Rotator();
+	Rotation.Yaw -= 90.0f;
+	CubeTransform.SetRotation(Rotation.Quaternion());
+	
+	CubeTransform.SetScale3D(FVector(0.4f, 0.4f, 0.4f)); // Scale down enemies
+
+	if (FreeVATInstanceIndices_Idle.Num() > 0)
+	{
+		InstanceIndex = FreeVATInstanceIndices_Idle.Pop();
+		VATISM_Idle->UpdateInstanceTransform(InstanceIndex, CubeTransform, false, false, false);
+	}
+	else
+	{
+		InstanceIndex = VATISM_Idle->AddInstance(CubeTransform, false);
+	}
+
+	return InstanceIndex;
+}
+
+int32 UEnemyVisualizationProcessor::AcquireVATInstance_Walk(const FTransform& Transform, const FEnemyVisualizationFragment& VisFragment)
+{
+	if (!VATISM_Walk || !VATISM_Walk->IsValidLowLevel())
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			InitializeVATSystem(World);
+		}
+
+		if (!VATISM_Walk)
+			return INDEX_NONE;
+	}
+
+	int32 InstanceIndex = INDEX_NONE;
+
+	// Adjust transform for static mesh mannequin
+	FTransform CubeTransform = Transform;
+	FVector	   Location = Transform.GetLocation();
+	Location.Z -= 88.0f; // Match skeletal mesh offset
+	CubeTransform.SetLocation(Location);
+	
+	// Rotate to match skeletal mesh orientation
+	FRotator Rotation = CubeTransform.Rotator();
+	Rotation.Yaw -= 90.0f;
+	CubeTransform.SetRotation(Rotation.Quaternion());
+	
+	CubeTransform.SetScale3D(FVector(0.4f, 0.4f, 0.4f)); // Scale down enemies
+
+	if (FreeVATInstanceIndices_Walk.Num() > 0)
+	{
+		InstanceIndex = FreeVATInstanceIndices_Walk.Pop();
+		VATISM_Walk->UpdateInstanceTransform(InstanceIndex, CubeTransform, false, false, false);
+	}
+	else
+	{
+		InstanceIndex = VATISM_Walk->AddInstance(CubeTransform, false);
+	}
+
+	return InstanceIndex;
+}
+
+// ===========================================================================
+// REPLACE the existing BatchUpdateVATInstances implementation with this:
+// ===========================================================================
+
+void UEnemyVisualizationProcessor::BatchUpdateVATInstances(
+	UHierarchicalInstancedStaticMeshComponent* ISM,
+	const TArray<FTransform>& Transforms,
+	const TArray<int32>&	  Indices,
+	const TArray<FVector4>&	  CustomData)
+{
+	if (!ISM || !ISM->IsValidLowLevel())
+	{
+		return;
+	}
+
+	// PERFORMANCE OPTIMIZATION: Prepare transforms for batch update
+	// Batch updates are MUCH faster than calling UpdateInstanceTransform in a loop
+	for (int32 i = 0; i < Transforms.Num(); ++i)
+	{
+		const int32 InstanceIndex = Indices[i];
+
+		// Adjust transform for static mesh mannequin
+		FTransform CubeTransform = Transforms[i];
+		FVector	   Location = CubeTransform.GetLocation();
+		Location.Z -= 88.0f;
+		CubeTransform.SetLocation(Location);
+		
+		FRotator Rotation = CubeTransform.Rotator();
+		Rotation.Yaw -= 90.0f;
+		CubeTransform.SetRotation(Rotation.Quaternion());
+		
+		CubeTransform.SetScale3D(FVector(0.4f, 0.4f, 0.4f)); // Scale down enemies
+
+		// Update each instance transform (still faster than before due to batched MarkRenderStateDirty)
+		ISM->UpdateInstanceTransform(InstanceIndex, CubeTransform, false, false, false);
+		
+		// Update custom data for VAT animation
+		if (CustomData.IsValidIndex(i))
+		{
+			ISM->SetCustomDataValue(InstanceIndex, 0, CustomData[i].X, false); // StartFrame
+			ISM->SetCustomDataValue(InstanceIndex, 1, CustomData[i].Y, false); // EndFrame
+			ISM->SetCustomDataValue(InstanceIndex, 2, CustomData[i].Z, false); // NormalizedTime
+			ISM->SetCustomDataValue(InstanceIndex, 3, CustomData[i].W, false); // Unused/blend weight
+		}
+	}
+
+	// Single render state update for all instances - this is the key optimization
+	ISM->MarkRenderStateDirty();
+}

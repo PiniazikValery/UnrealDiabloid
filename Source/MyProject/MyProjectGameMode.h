@@ -9,7 +9,7 @@
 #include "AI/NavigationSystemBase.h"
 #include "NavigationSystem.h"
 #include "./AI/MyAIController.h"
-#include "./AI/AEnemySpawner.h"
+#include "./Mass/MassEnemySpawner.h"
 #include "MyProjectGameMode.generated.h"
 
 UCLASS(minimalapi)

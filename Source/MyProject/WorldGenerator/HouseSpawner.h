@@ -70,6 +70,11 @@ private:
 	UPROPERTY(EditAnywhere, Category = "House Spawning")
 	bool bUseLowestPoint = true; // Use lowest corner instead of average
 	
+	// Probability that a spawned house will get a NavBlocker (0.0 - 1.0)
+	// Lower values reduce lag but may allow AI to path through some houses
+	UPROPERTY(EditAnywhere, Category = "House Spawning", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float NavBlockerSpawnChance = 1.0f;
+	
 	// House spawning methods
 	void SpawnHousesOnTile(const FIntPoint& TileKey);
 	void RemoveHousesOnTile(const FIntPoint& TileKey);

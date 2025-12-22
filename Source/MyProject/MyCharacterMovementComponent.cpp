@@ -38,7 +38,6 @@ void UMyCharacterMovementComponent::StartDodge()
     // Safety check - recreate DodgeObject if it's null or invalid
     if (!DodgeObject || !IsValid(DodgeObject))
     {
-        UE_LOG(LogTemp, Warning, TEXT("StartDodge: DodgeObject is null or invalid, creating new one"));
         DodgeObject = NewObject<UDodge>(this);
         if (DodgeObject)
         {
@@ -46,7 +45,6 @@ void UMyCharacterMovementComponent::StartDodge()
         }
         else
         {
-            UE_LOG(LogTemp, Error, TEXT("StartDodge: Failed to create new DodgeObject!"));
             return;
         }
     }
@@ -66,7 +64,6 @@ bool UMyCharacterMovementComponent::CanDodge() const
     // Safety check - ensure DodgeObject is valid
     if (!DodgeObject || !IsValid(DodgeObject))
     {
-        UE_LOG(LogTemp, Warning, TEXT("CanDodge: DodgeObject is null or invalid"));
         return false;
     }
     
@@ -219,7 +216,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float Del
             if (!bCanStartDodge && !bIsDodging && DodgeCooldownTimer <= 0.1f && !DodgeObject->bWaitingForServerSync)
             {
                 bCanStartDodge = true;
-                UE_LOG(LogTemp, Warning, TEXT("CLIENT: Aggressive sync compensation - allowing dodge despite cooldown: %f"), DodgeCooldownTimer);
             }
         }
         
@@ -227,9 +223,7 @@ void UMyCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float Del
         {
             // Only server should initiate dodge state change authoritatively
             if (PawnOwner && PawnOwner->GetLocalRole() == ROLE_Authority)
-            {
-                UE_LOG(LogTemp, Warning, TEXT("SERVER: Starting dodge - setting custom movement mode"));
-                
+            {   
                 // Rotate character to face dodge direction before disabling rotation
                 RotateToDodgeDirection();
                 
@@ -260,16 +254,13 @@ void UMyCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float Del
                         ClientNotifyDodgeStateChanged(true);
                         
                         ClientNotifyCooldownChanged(DodgeObject->DodgeCooldown);
-                        UE_LOG(LogTemp, Warning, TEXT("SERVER: Sent ClientNotifyDodgeStateChanged(true) and ClientNotifyCooldownChanged(%f)"), DodgeObject->DodgeCooldown);
                     }
-                }                UE_LOG(LogTemp, Warning, TEXT("SERVER: Set cooldown timer to %f"), DodgeObject->DodgeCooldown);
-                UE_LOG(LogTemp, Warning, TEXT("SERVER: Dodge started - bWantsToDodge set to false, DodgeTimer: %f"), DodgeObject->DodgeTimer);
+                }
             }
             else
             {
                 // CLIENT: Don't start dodge until server confirms
                 // Just clear the flag and wait for server RPC to actually start the dodge
-                UE_LOG(LogTemp, Warning, TEXT("CLIENT: Dodge request sent to server - waiting for confirmation before starting"));
                 DodgeObject->bWantsToDodge = false; // Clear flag immediately
                 
                 // Set waiting for sync so we don't spam requests
@@ -285,10 +276,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float Del
         }
         else
         {
-            UE_LOG(LogTemp, Warning, TEXT("Cannot start dodge - bCanStartDodge: %s, bIsDodging: %s, DodgeCooldownTimer: %f"), 
-                bCanStartDodge ? TEXT("true") : TEXT("false"),
-                bIsDodging ? TEXT("true") : TEXT("false"),
-                DodgeCooldownTimer);
             DodgeObject->bWantsToDodge = false; // Clear to prevent spam
         }
     }
@@ -319,7 +306,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateAfterMovement(float Delt
             // Only server should end dodge state authoritatively
             if (PawnOwner && PawnOwner->GetLocalRole() == ROLE_Authority)
             {
-                UE_LOG(LogTemp, Warning, TEXT("SERVER: Dodge timer expired - ending dodge"));
                 bIsDodging = false;
                 DodgeObject->bWantsToDodge = false;
                 
@@ -344,11 +330,8 @@ void UMyCharacterMovementComponent::UpdateCharacterStateAfterMovement(float Delt
                     if (Character->GetController() && !Character->GetController()->IsLocalController())
                     {
                         ClientNotifyDodgeStateChanged(false);
-                        UE_LOG(LogTemp, Warning, TEXT("SERVER: Sent ClientNotifyDodgeStateChanged(false)"));
                     }
                 }
-                
-                UE_LOG(LogTemp, Warning, TEXT("SERVER: Dodge ended - bIsDodging: false, bWantsToDodge: false"));
             }
             else
             {
@@ -372,7 +355,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateAfterMovement(float Delt
             DodgeCooldownTimer -= DeltaSeconds;
             if (DodgeCooldownTimer <= 0.0f)
             {
-                UE_LOG(LogTemp, Warning, TEXT("SERVER: Dodge cooldown expired"));
                 DodgeCooldownTimer = 0.0f; // Ensure it's exactly 0
                 
                 // Notify client when cooldown expires
@@ -381,7 +363,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateAfterMovement(float Delt
                     if (Character->GetController() && !Character->GetController()->IsLocalController())
                     {
                         ClientNotifyCooldownChanged(0.0f);
-                        UE_LOG(LogTemp, Warning, TEXT("SERVER: Sent ClientNotifyCooldownChanged(0.0)"));
                     }
                 }
             }
@@ -396,7 +377,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateAfterMovement(float Delt
         {
             if (bIsDodging)
             {
-                UE_LOG(LogTemp, Error, TEXT("SERVER SAFETY: Force ending dodge that should have ended"));
                 DodgeObject->bHasInitializedDodgePosition = false;
                 RestoreRotationAfterDodge();
                 bIsDodging = false;
@@ -409,7 +389,6 @@ void UMyCharacterMovementComponent::UpdateCharacterStateAfterMovement(float Delt
             // Client should predict state changes for immediate feedback
             if (MovementMode == MOVE_Custom && !DodgeObject->bClientHasPredictedDodgeEnd)
             {
-                UE_LOG(LogTemp, Error, TEXT("CLIENT SAFETY: Force ending custom movement mode"));
                 DodgeObject->bHasInitializedDodgePosition = false;
                 RestoreRotationAfterDodge();
                 bIsDodging = false; // Update client state immediately
@@ -431,9 +410,7 @@ void UMyCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterations
     switch (CustomMovementMode)
     {
         case ECustomMovementMode::CMOVE_Dodge:
-        {
-            UE_LOG(LogTemp, Warning, TEXT("PhysCustom - CMOVE_Dodge executing"));
-            
+        {   
             // Calculate dodge velocity
             FVector DodgeVel = DodgeDirection * DodgeObject->DodgeSpeed;
             
@@ -446,8 +423,6 @@ void UMyCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterations
             // Keep character close to ground but add slight upward velocity to avoid getting stuck
             // This creates a "sliding" effect rather than flying
             DodgeVel.Z = FMath::Max(DodgeVel.Z, DodgeObject->DodgeGroundClearance); // Small upward velocity to clear tiny obstacles
-            
-            UE_LOG(LogTemp, Warning, TEXT("Dodge velocity: %s"), *DodgeVel.ToString());
             
             // Set velocity directly for instant dodge
             Velocity = DodgeVel;
@@ -463,7 +438,6 @@ void UMyCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterations
             const FVector Adjusted = Velocity * deltaTime;
             FHitResult Hit(1.f);
             
-            UE_LOG(LogTemp, Warning, TEXT("PhysCustom - Moving with Adjusted: %s, Velocity: %s"), *Adjusted.ToString(), *Velocity.ToString());
             // Move with collision detection
             SafeMoveUpdatedComponent(Adjusted, UpdatedComponent->GetComponentQuat(), true, Hit);
             
@@ -491,7 +465,6 @@ void UMyCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterations
             break;
         }
         default:
-            UE_LOG(LogTemp, Warning, TEXT("Invalid custom movement mode"));
             SetMovementMode(MOVE_Walking);
             break;
     }

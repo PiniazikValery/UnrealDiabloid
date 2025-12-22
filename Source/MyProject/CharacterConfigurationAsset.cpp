@@ -32,6 +32,7 @@ UAnimMontage* UCharacterConfigurationAsset::GetAnimationMontage(FName MontageNam
 	return nullptr;
 }
 
+#if WITH_EDITOR
 void UCharacterConfigurationAsset::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -71,6 +72,7 @@ void UCharacterConfigurationAsset::PostEditChangeProperty(FPropertyChangedEvent&
 	}
 #endif
 }
+#endif
 
 #if WITH_EDITOR
 EDataValidationResult UCharacterConfigurationAsset::IsDataValid(FDataValidationContext& Context) const
