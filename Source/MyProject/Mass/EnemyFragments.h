@@ -232,33 +232,62 @@ struct MYPROJECT_API FEnemyVisualizationFragment : public FMassFragment
 
 	// Current render mode
 	EEnemyRenderMode RenderMode = EEnemyRenderMode::None;
-	
+
 	// Index of this entity's instance in the ISM component (for VAT rendering)
 	// -1 means no instance created yet
 	int32 ISMInstanceIndex = -1;
-	
+
 	// Index into the skeletal mesh pool (for skeletal mesh rendering)
 	// INDEX_NONE means no skeletal mesh assigned
 	int32 SkeletalMeshPoolIndex = INDEX_NONE;
-	
+
 	// Is this entity currently visible?
 	bool bIsVisible = true;
-	
+
 	// LOD level (0 = highest detail, 3 = lowest)
 	int32 CurrentLOD = 0;
-	
+
 	// Cached distance to camera (updated each frame)
 	float CachedDistanceToCamera = 0.0f;
-	
+
 	// Animation time accumulator (for VAT animation)
 	float AnimationTime = 0.0f;
-	
+
 	// Animation play rate multiplier
 	float AnimationPlayRate = 1.0f;
 
 	UPROPERTY()
 	float PoolLockTimer = 0.0f;
-	
+
 	// Track which ISM this entity is in: true = walking ISM, false = idle ISM
 	bool bISMIsWalking = false;
+};
+
+/**
+ * Fragment: Network replication data
+ * Contains compressed state for network transmission
+ * Used for custom MASS entity replication (MASS entities are NOT UObjects)
+ */
+USTRUCT()
+struct MYPROJECT_API FEnemyNetworkFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	// Network identity (stable ID for client-server entity mapping)
+	int32 NetworkID = INDEX_NONE;
+
+	// Replication control
+	float TimeSinceLastReplication = 0.0f;     // Tracks when last replicated
+	uint8 ReplicationPriority = 0;             // 0-255, higher = more frequent updates
+	bool bIsRelevantToAnyClient = false;       // Relevancy flag
+
+	// Compressed state (packed for bandwidth efficiency)
+	FVector_NetQuantize10 ReplicatedPosition = FVector::ZeroVector;  // 10cm precision
+	uint16 ReplicatedRotationYaw = 0;          // 0-65535 mapped to 0-360 degrees
+	uint8 ReplicatedHealth = 255;              // 0-255 (scale from 0-100)
+	uint8 ReplicatedFlags = 0;                 // Bit-packed: bIsAlive(1), bIsAttacking(1), bIsMoving(1)
+
+	// Prediction data (for client interpolation)
+	FVector_NetQuantize ReplicatedVelocity = FVector::ZeroVector;    // For client prediction
+	int16 TargetPlayerIndex = -1;              // Which player this enemy targets (-1 = none)
 };
