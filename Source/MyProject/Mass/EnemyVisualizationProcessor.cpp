@@ -28,10 +28,22 @@ UEnemyVisualizationProcessor::UEnemyVisualizationProcessor()
 	SkeletalMeshMaxDistance = 2000.0f;
 	VATMaxDistance = 5000.0f;
 	LODHysteresis = 50.0f;
-	SkeletalMeshPoolSize = 30;
+	SkeletalMeshPoolSize = 10;
 	UpdateFrequency = 1;
 	bCastShadows = false;
 	bEnableVATRendering = true;
+
+	// ISM velocity hysteresis to prevent flickering when switching idle/walk
+	ISMVelocityThreshold = 10.0f;
+	ISMVelocityHysteresis = 5.0f;
+
+	// Animation sync settings for smooth LOD transitions
+	bEnableAnimationSync = true;
+	IdleAnimationCycleDuration = 2.0f;
+	WalkAnimationCycleDuration = 0.8f;
+	AnimationSyncTolerance = 0.15f;
+	MaxSyncWaitTime = 1.0f;
+	bSkipSkeletalMeshForIdleEnemies = true;
 
 	// Skeletal mesh - remove the "/Script/Engine.SkeletalMesh'" prefix
 	EnemySkeletalMesh = TSoftObjectPtr<USkeletalMesh>(
@@ -553,45 +565,133 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		NumShouldHaveSkeletal++;
 	}
 
-	// PHASE 1: Release skeletal meshes from far entities
+	// PHASE 1: Transition far entities from skeletal mesh to ISM (acquire-before-release to prevent flickering)
 	for (int32 i = NumShouldHaveSkeletal; i < CachedAllEntities.Num(); ++i)
 	{
 		FEnemyVisualizationFragment& Vis = *CachedAllEntities[i].VisFragment;
 		if (Vis.RenderMode == EEnemyRenderMode::SkeletalMesh && Vis.SkeletalMeshPoolIndex >= 0)
 		{
+			const FTransform& Transform = *CachedAllEntities[i].Transform;
+			const FEnemyMovementFragment& Movement = *CachedAllEntities[i].Movement;
+
+			// Determine walking state for ISM
+			const float Speed = Movement.Velocity.Size();
+			const bool bIsWalking = Speed > ISMVelocityThreshold;
+
+			// ACQUIRE ISM FIRST before releasing skeletal mesh to prevent flickering
+			int32 NewISMIndex = AcquireVATInstance(Transform, Vis, bIsWalking);
+
+			// Now release skeletal mesh
 			ReleaseSkeletalMesh(Vis.SkeletalMeshPoolIndex);
 			Vis.SkeletalMeshPoolIndex = INDEX_NONE;
-			Vis.RenderMode = EEnemyRenderMode::ISM_VAT; // Will get instance below
-			Vis.ISMInstanceIndex = INDEX_NONE;			// Force re-acquire
+			Vis.RenderMode = EEnemyRenderMode::ISM_VAT;
+			Vis.ISMInstanceIndex = NewISMIndex;
+			Vis.bISMIsWalking = bIsWalking;
 		}
 	}
 
-	// PHASE 2: Assign skeletal meshes to close entities
+	// PHASE 2: Assign skeletal meshes to close entities (with animation sync for smooth transitions)
 	for (int32 i = 0; i < NumShouldHaveSkeletal; ++i)
 	{
 		FEnemyVisualizationFragment& Vis = *CachedAllEntities[i].VisFragment;
+		const FEnemyMovementFragment& Movement = *CachedAllEntities[i].Movement;
+
+		// Check if enemy is idle (not moving) with hysteresis - skip skeletal mesh for idle enemies
+		const float Speed = Movement.Velocity.Size();
+		bool bIsIdle;
+		if (Vis.RenderMode == EEnemyRenderMode::SkeletalMesh)
+		{
+			// Currently has skeletal mesh - need to drop below threshold minus hysteresis to become "idle"
+			bIsIdle = Speed < (ISMVelocityThreshold - ISMVelocityHysteresis);
+		}
+		else
+		{
+			// Currently ISM - need to exceed threshold plus hysteresis to NOT be considered "idle"
+			bIsIdle = Speed < (ISMVelocityThreshold + ISMVelocityHysteresis);
+		}
+
 		if (Vis.RenderMode == EEnemyRenderMode::SkeletalMesh && Vis.SkeletalMeshPoolIndex >= 0)
 		{
-			continue; // Already has one
+			// Already has skeletal mesh - check if we should release it because enemy is now idle
+			if (bSkipSkeletalMeshForIdleEnemies && bIsIdle)
+			{
+				// Enemy stopped moving - transition back to ISM to free up skeletal mesh slot
+				const FTransform& Transform = *CachedAllEntities[i].Transform;
+				int32 NewISMIndex = AcquireVATInstance(Transform, Vis, false);
+
+				ReleaseSkeletalMesh(Vis.SkeletalMeshPoolIndex);
+				Vis.SkeletalMeshPoolIndex = INDEX_NONE;
+				Vis.RenderMode = EEnemyRenderMode::ISM_VAT;
+				Vis.ISMInstanceIndex = NewISMIndex;
+				Vis.bISMIsWalking = false;
+				Vis.bPendingSkeletalMeshTransition = false;
+				continue;
+			}
+
+			// Still moving, keep skeletal mesh
+			Vis.bPendingSkeletalMeshTransition = false;
+			continue;
 		}
 
-		// Release ISM if had one
-		if (Vis.ISMInstanceIndex >= 0)
+		// Skip skeletal mesh for idle enemies - ISM+VAT handles idle well
+		if (bSkipSkeletalMeshForIdleEnemies && bIsIdle)
 		{
-			ReleaseVATInstance(Vis.ISMInstanceIndex, Vis.bISMIsWalking);
-			Vis.ISMInstanceIndex = INDEX_NONE;
+			// FIX: If enemy stopped moving but is still in walking ISM, switch to idle ISM
+			if (Vis.RenderMode == EEnemyRenderMode::ISM_VAT && Vis.bISMIsWalking && Vis.ISMInstanceIndex >= 0)
+			{
+				SwitchISMAnimationState(Vis, *CachedAllEntities[i].Transform, false);
+			}
+			Vis.bPendingSkeletalMeshTransition = false;
+			continue;
 		}
 
-		// Acquire skeletal mesh
+		// Entity is in ISM mode and should transition to skeletal mesh (only for moving enemies)
+		if (Vis.RenderMode == EEnemyRenderMode::ISM_VAT && Vis.ISMInstanceIndex >= 0)
+		{
+			// Mark as pending transition if not already
+			if (!Vis.bPendingSkeletalMeshTransition)
+			{
+				Vis.bPendingSkeletalMeshTransition = true;
+				Vis.PoolLockTimer = 0.0f; // Reset wait timer
+			}
+
+			// Update wait timer and animation progress
+			Vis.PoolLockTimer += DeltaTime;
+			UpdateAnimationCycleProgress(Vis, DeltaTime);
+
+			// Check if we should do the transition now:
+			// 1. Animation is at a sync point (near start/end of cycle), OR
+			// 2. We've waited too long (force transition)
+			const bool bAtSyncPoint = IsAtAnimationSyncPoint(Vis);
+			const bool bForceTransition = Vis.PoolLockTimer >= MaxSyncWaitTime;
+
+			if (!bAtSyncPoint && !bForceTransition)
+			{
+				// Keep waiting for a better moment - but still need to update ISM transform
+				// (will be collected in the pending entities batch below)
+				continue;
+			}
+		}
+
+		// Ready to transition - try to acquire skeletal mesh
 		if (FreeSkeletalMeshIndices.Num() > 0)
 		{
 			int32 PoolIndex = AcquireSkeletalMesh(CachedAllEntities[i].Entity, *CachedAllEntities[i].Transform);
 			if (PoolIndex >= 0)
 			{
+				// Successfully acquired skeletal mesh, now release ISM if had one
+				if (Vis.ISMInstanceIndex >= 0)
+				{
+					ReleaseVATInstance(Vis.ISMInstanceIndex, Vis.bISMIsWalking);
+					Vis.ISMInstanceIndex = INDEX_NONE;
+				}
+
 				Vis.SkeletalMeshPoolIndex = PoolIndex;
 				Vis.RenderMode = EEnemyRenderMode::SkeletalMesh;
 				Vis.bIsVisible = true;
+				Vis.bPendingSkeletalMeshTransition = false;
 			}
+			// If acquisition failed, keep ISM visible (don't flicker to nothing)
 		}
 	}
 
@@ -605,14 +705,47 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 	VATTransforms_Walk.Reserve(512);
 	VATIndices_Walk.Reserve(512);
 
+	// First, collect pending entities (close to player but waiting for animation sync)
+	for (int32 i = 0; i < NumShouldHaveSkeletal; ++i)
+	{
+		FEnemyVisualizationFragment& Vis = *CachedAllEntities[i].VisFragment;
+		if (Vis.bPendingSkeletalMeshTransition && Vis.ISMInstanceIndex >= 0)
+		{
+			const FTransform& Transform = *CachedAllEntities[i].Transform;
+			if (Vis.bISMIsWalking)
+			{
+				VATTransforms_Walk.Add(Transform);
+				VATIndices_Walk.Add(Vis.ISMInstanceIndex);
+			}
+			else
+			{
+				VATTransforms_Idle.Add(Transform);
+				VATIndices_Idle.Add(Vis.ISMInstanceIndex);
+			}
+		}
+	}
+
+	// Then collect distant ISM entities
+
 	for (int32 i = NumShouldHaveSkeletal; i < CachedAllEntities.Num(); ++i)
 	{
 		FEnemyVisualizationFragment&  Vis = *CachedAllEntities[i].VisFragment;
 		const FTransform&			  Transform = *CachedAllEntities[i].Transform;
 		const FEnemyMovementFragment& Movement = *CachedAllEntities[i].Movement;
 
-		// Determine walking state
-		const bool bIsWalking = Movement.Velocity.SizeSquared() > 100.0f;
+		// Determine walking state WITH HYSTERESIS to prevent flickering
+		const float Speed = Movement.Velocity.Size();
+		bool bIsWalking;
+		if (Vis.bISMIsWalking)
+		{
+			// Currently walking - need to drop below threshold minus hysteresis to go idle
+			bIsWalking = Speed > (ISMVelocityThreshold - ISMVelocityHysteresis);
+		}
+		else
+		{
+			// Currently idle - need to exceed threshold plus hysteresis to start walking
+			bIsWalking = Speed > (ISMVelocityThreshold + ISMVelocityHysteresis);
+		}
 
 		// Acquire or switch ISM instance
 		if (Vis.ISMInstanceIndex < 0)
@@ -628,6 +761,9 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		Vis.RenderMode = EEnemyRenderMode::ISM_VAT;
 		Vis.bIsVisible = true;
 
+		// Update animation cycle progress for sync point detection
+		UpdateAnimationCycleProgress(Vis, DeltaTime);
+
 		// Collect for batch update
 		if (Vis.ISMInstanceIndex >= 0)
 		{
@@ -642,16 +778,6 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				VATIndices_Idle.Add(Vis.ISMInstanceIndex);
 			}
 		}
-	}
-
-	// ========== PASS 4: Batch update ISM instances ==========
-	if (VATTransforms_Idle.Num() > 0 && VATISM)
-	{
-		BatchUpdateVATInstances(VATTransforms_Idle, VATIndices_Idle, false);
-	}
-	if (VATTransforms_Walk.Num() > 0 && VATISM_Walk)
-	{
-		BatchUpdateVATInstances(VATTransforms_Walk, VATIndices_Walk, true);
 	}
 
 	static int32 DebugCounter = 0;
@@ -678,7 +804,7 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		UE_LOG(LogTemp, Warning, TEXT("Camera Location: %s"), *CachedCameraLocation.ToString());
 	}
 
-	// В конце Execute, после batch updates:
+	// ========== PASS 4: Batch update ISM instances ==========
 	if (VATTransforms_Idle.Num() > 0 && VATISM)
 	{
 		BatchUpdateVATInstances(VATTransforms_Idle, VATIndices_Idle, false);
@@ -688,7 +814,7 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		BatchUpdateVATInstances(VATTransforms_Walk, VATIndices_Walk, true);
 	}
 
-	// ДОБАВЬТЕ ЭТО - принудительное обновление даже если не было изменений
+	// Force render state update even if there were no changes
 	if (VATISM)
 	{
 		VATISM->MarkRenderStateDirty();
@@ -731,6 +857,41 @@ EEnemyAnimationState UEnemyVisualizationProcessor::DetermineAnimationState(
 	return EEnemyAnimationState::Idle;
 }
 
+bool UEnemyVisualizationProcessor::IsAtAnimationSyncPoint(const FEnemyVisualizationFragment& VisFragment) const
+{
+	if (!bEnableAnimationSync)
+	{
+		return true; // Always allow transition if sync is disabled
+	}
+
+	// Check if at start or end of animation cycle (within tolerance)
+	const float Progress = VisFragment.AnimationCycleProgress;
+
+	// Near cycle start (0.0) or end (1.0)
+	const bool bNearStart = Progress < AnimationSyncTolerance;
+	const bool bNearEnd = Progress > (1.0f - AnimationSyncTolerance);
+
+	return bNearStart || bNearEnd;
+}
+
+void UEnemyVisualizationProcessor::UpdateAnimationCycleProgress(FEnemyVisualizationFragment& VisFragment, float DeltaTime) const
+{
+	// Get the appropriate cycle duration based on walking state
+	const float CycleDuration = VisFragment.bISMIsWalking ? WalkAnimationCycleDuration : IdleAnimationCycleDuration;
+
+	if (CycleDuration <= 0.0f)
+	{
+		VisFragment.AnimationCycleProgress = 0.0f;
+		return;
+	}
+
+	// Increment animation time
+	VisFragment.AnimationTime += DeltaTime * VisFragment.AnimationPlayRate;
+
+	// Calculate progress through current cycle (0.0 to 1.0)
+	VisFragment.AnimationCycleProgress = FMath::Fmod(VisFragment.AnimationTime, CycleDuration) / CycleDuration;
+}
+
 // ============================================================================
 // RENDER MODE
 // ============================================================================
@@ -761,30 +922,14 @@ EEnemyRenderMode UEnemyVisualizationProcessor::DetermineRenderMode(float Distanc
 void UEnemyVisualizationProcessor::TransitionRenderMode(FMassEntityHandle Entity,
 	FEnemyVisualizationFragment& VisFragment, EEnemyRenderMode NewMode, const FTransform& Transform)
 {
-	// Release old
-	switch (VisFragment.RenderMode)
-	{
-		case EEnemyRenderMode::SkeletalMesh:
-			if (VisFragment.SkeletalMeshPoolIndex >= 0)
-			{
-				ReleaseSkeletalMesh(VisFragment.SkeletalMeshPoolIndex);
-				VisFragment.SkeletalMeshPoolIndex = INDEX_NONE;
-			}
-			break;
+	// Store old state for acquire-before-release pattern
+	int32 OldSkeletalIndex = VisFragment.SkeletalMeshPoolIndex;
+	int32 OldISMIndex = VisFragment.ISMInstanceIndex;
+	bool bOldISMWasWalking = VisFragment.bISMIsWalking;
+	EEnemyRenderMode OldMode = VisFragment.RenderMode;
 
-		case EEnemyRenderMode::ISM_VAT:
-			if (VisFragment.ISMInstanceIndex >= 0)
-			{
-				ReleaseVATInstance(VisFragment.ISMInstanceIndex, VisFragment.bISMIsWalking);
-				VisFragment.ISMInstanceIndex = INDEX_NONE;
-			}
-			break;
-
-		default:
-			break;
-	}
-
-	// Acquire new
+	// Acquire new representation FIRST
+	bool bAcquiredNew = false;
 	switch (NewMode)
 	{
 		case EEnemyRenderMode::SkeletalMesh:
@@ -794,13 +939,19 @@ void UEnemyVisualizationProcessor::TransitionRenderMode(FMassEntityHandle Entity
 			{
 				VisFragment.SkeletalMeshPoolIndex = PoolIndex;
 				VisFragment.RenderMode = EEnemyRenderMode::SkeletalMesh;
+				bAcquiredNew = true;
 			}
 			else
 			{
-				// ALWAYS fallback to ISM - never hide (default to idle)
+				// Fallback to ISM - never hide (default to idle)
 				VisFragment.bISMIsWalking = false;
-				VisFragment.ISMInstanceIndex = AcquireVATInstance(Transform, VisFragment, false);
-				VisFragment.RenderMode = EEnemyRenderMode::ISM_VAT;
+				int32 ISMIndex = AcquireVATInstance(Transform, VisFragment, false);
+				if (ISMIndex >= 0)
+				{
+					VisFragment.ISMInstanceIndex = ISMIndex;
+					VisFragment.RenderMode = EEnemyRenderMode::ISM_VAT;
+					bAcquiredNew = true;
+				}
 			}
 			break;
 		}
@@ -814,21 +965,42 @@ void UEnemyVisualizationProcessor::TransitionRenderMode(FMassEntityHandle Entity
 			{
 				VisFragment.ISMInstanceIndex = InstanceIndex;
 				VisFragment.RenderMode = EEnemyRenderMode::ISM_VAT;
-			}
-			else
-			{
-				VisFragment.RenderMode = EEnemyRenderMode::Hidden;
+				bAcquiredNew = true;
 			}
 			break;
 		}
 
 		default:
-			// NEVER hide - fallback to ISM (default to idle)
+			// Fallback to ISM (default to idle)
 			VisFragment.bISMIsWalking = false;
-			VisFragment.ISMInstanceIndex = AcquireVATInstance(Transform, VisFragment, false);
-			VisFragment.RenderMode = EEnemyRenderMode::ISM_VAT;
+			int32 ISMIndex = AcquireVATInstance(Transform, VisFragment, false);
+			if (ISMIndex >= 0)
+			{
+				VisFragment.ISMInstanceIndex = ISMIndex;
+				VisFragment.RenderMode = EEnemyRenderMode::ISM_VAT;
+				bAcquiredNew = true;
+			}
 			break;
 	}
+
+	// Only release old representation AFTER acquiring new one (prevents flickering)
+	if (bAcquiredNew)
+	{
+		// Release old skeletal mesh if we had one and it's different from what we acquired
+		if (OldMode == EEnemyRenderMode::SkeletalMesh && OldSkeletalIndex >= 0 &&
+			OldSkeletalIndex != VisFragment.SkeletalMeshPoolIndex)
+		{
+			ReleaseSkeletalMesh(OldSkeletalIndex);
+		}
+
+		// Release old ISM if we had one and it's different from what we acquired
+		if (OldMode == EEnemyRenderMode::ISM_VAT && OldISMIndex >= 0 &&
+			OldISMIndex != VisFragment.ISMInstanceIndex)
+		{
+			ReleaseVATInstance(OldISMIndex, bOldISMWasWalking);
+		}
+	}
+	// If acquisition failed, keep the old representation visible
 
 	VisFragment.bIsVisible = (VisFragment.RenderMode != EEnemyRenderMode::Hidden);
 }
@@ -1097,15 +1269,25 @@ void UEnemyVisualizationProcessor::SwitchISMAnimationState(FEnemyVisualizationFr
 		return; // No change needed
 	}
 
-	// Release from current ISM
-	if (VisFragment.ISMInstanceIndex >= 0)
-	{
-		ReleaseVATInstance(VisFragment.ISMInstanceIndex, bCurrentlyWalking);
-	}
+	// ACQUIRE-BEFORE-RELEASE: Get new instance first to prevent flickering
+	int32 OldInstanceIndex = VisFragment.ISMInstanceIndex;
+	bool bOldWasWalking = bCurrentlyWalking;
 
-	// Acquire in new ISM
-	VisFragment.ISMInstanceIndex = AcquireVATInstance(Transform, VisFragment, bNewIsWalking);
-	VisFragment.bISMIsWalking = bNewIsWalking;
+	// Acquire in new ISM first
+	int32 NewInstanceIndex = AcquireVATInstance(Transform, VisFragment, bNewIsWalking);
+
+	if (NewInstanceIndex >= 0)
+	{
+		// Successfully acquired new instance, now release old one
+		VisFragment.ISMInstanceIndex = NewInstanceIndex;
+		VisFragment.bISMIsWalking = bNewIsWalking;
+
+		if (OldInstanceIndex >= 0)
+		{
+			ReleaseVATInstance(OldInstanceIndex, bOldWasWalking);
+		}
+	}
+	// If acquisition failed, keep the old instance (don't flicker to nothing)
 }
 
 void UEnemyVisualizationProcessor::BatchUpdateVATInstances(

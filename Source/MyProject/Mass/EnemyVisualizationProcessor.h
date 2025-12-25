@@ -146,7 +146,7 @@ public:
 	float VATMaxDistance = 8000.0f;
 
 	UPROPERTY(EditAnywhere, Category = "LOD")
-	float LODHysteresis = 200.0f;
+	float LODHysteresis = 150.0f;
 
 	// Skeletal mesh settings
 	UPROPERTY(EditAnywhere, Category = "Skeletal Mesh")
@@ -177,6 +177,33 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = "Visualization")
 	float PoolLockDuration = 0.5f;
+
+	// Hysteresis for ISM idle/walk switching to prevent flickering
+	UPROPERTY(EditAnywhere, Category = "Visualization")
+	float ISMVelocityThreshold = 50.0f;  // Speed threshold for walk state
+
+	UPROPERTY(EditAnywhere, Category = "Visualization")
+	float ISMVelocityHysteresis = 30.0f;  // Hysteresis band to prevent rapid switching
+
+	// Animation sync settings for smooth ISM->SkeletalMesh transitions
+	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
+	bool bEnableAnimationSync = true;  // Wait for animation sync point before transitioning
+
+	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
+	float IdleAnimationCycleDuration = 2.0f;  // Duration of one idle animation cycle (seconds)
+
+	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
+	float WalkAnimationCycleDuration = 0.8f;  // Duration of one walk animation cycle (seconds)
+
+	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
+	float AnimationSyncTolerance = 0.15f;  // How close to cycle start/end to allow transition (0.0-0.5)
+
+	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
+	float MaxSyncWaitTime = 1.0f;  // Maximum time to wait for sync before forcing transition
+
+	// Skip skeletal mesh for idle enemies (ISM+VAT handles idle well)
+	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
+	bool bSkipSkeletalMeshForIdleEnemies = true;
 
 	UPROPERTY(EditAnywhere, Category = "Distant LOD")
 	TSoftObjectPtr<UStaticMesh> SimpleDistantMesh;
@@ -286,6 +313,12 @@ protected:
 		const FEnemyMovementFragment& Movement,
 		const FEnemyAttackFragment& Attack,
 		const FEnemyStateFragment& State) const;
+
+	// Check if animation is at a good sync point for LOD transition
+	bool IsAtAnimationSyncPoint(const FEnemyVisualizationFragment& VisFragment) const;
+
+	// Update animation cycle progress for an entity
+	void UpdateAnimationCycleProgress(FEnemyVisualizationFragment& VisFragment, float DeltaTime) const;
 
 	// ========================================================================
 	// PUBLIC API

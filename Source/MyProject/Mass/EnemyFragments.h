@@ -261,6 +261,10 @@ struct MYPROJECT_API FEnemyVisualizationFragment : public FMassFragment
 
 	// Track which ISM this entity is in: true = walking ISM, false = idle ISM
 	bool bISMIsWalking = false;
+
+	// Animation sync for smooth LOD transitions
+	bool bPendingSkeletalMeshTransition = false;  // Waiting to switch to skeletal mesh at sync point
+	float AnimationCycleProgress = 0.0f;          // 0.0-1.0 progress through current animation cycle
 };
 
 /**
