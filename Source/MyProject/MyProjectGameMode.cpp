@@ -2,6 +2,7 @@
 
 #include "MyProjectGameMode.h"
 #include "MyProjectCharacter.h"
+#include "MyProjectGameState.h"
 #include "./WorldGenerator/LandscapeGenerator.h"
 #include "./AWarmupManager.h"
 #include "UObject/ConstructorHelpers.h"
@@ -17,6 +18,10 @@
 AMyProjectGameMode::AMyProjectGameMode()
 {
 	DefaultPawnClass = AMyProjectCharacter::StaticClass();
+
+	// Phase 1: Set custom GameState and PlayerController for MASS entity replication
+	GameStateClass = AMyProjectGameState::StaticClass();
+	PlayerControllerClass = AMyProjectPlayerController::StaticClass();
 }
 
 void AMyProjectGameMode::BeginPlay()

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "MyProjectCharacter.h"
+#include "MyProjectPlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "AI/NavigationSystemBase.h"
 #include "NavigationSystem.h"

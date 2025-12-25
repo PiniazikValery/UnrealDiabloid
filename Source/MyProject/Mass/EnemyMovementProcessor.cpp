@@ -60,6 +60,12 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 		return;
 	}
 
+	// Only run on server - client entities are updated via replication
+	if (World->GetNetMode() == NM_Client)
+	{
+		return;
+	}
+
 	// Cache player reference
 	if (!CachedPlayerPawn.IsValid())
 	{
