@@ -34,12 +34,18 @@ struct MYPROJECT_API FEnemyTargetFragment : public FMassFragment
 
 	// Current target location (usually player position)
 	FVector TargetLocation = FVector::ZeroVector;
-	
+
 	// Reference to target actor (weak pointer for safety)
 	TWeakObjectPtr<AActor> TargetActor = nullptr;
-	
+
 	// Distance to target (cached for performance)
 	float DistanceToTarget = 0.0f;
+
+	// Which player this enemy is targeting (-1 = unassigned, will be assigned to nearest)
+	int32 TargetPlayerIndex = INDEX_NONE;
+
+	// Cooldown before enemy can switch to a different player target
+	float PlayerSwitchCooldown = 0.0f;
 };
 
 /**
@@ -159,6 +165,7 @@ struct MYPROJECT_API FEnemyMovementFragment : public FMassFragment
 	FVector DesiredFacingDirection = FVector::ZeroVector;
 
 	// Slot-based movement system
+	int32 AssignedSlotPlayerIndex = INDEX_NONE;  // Which player's slots this enemy is assigned to
 	int32 AssignedSlotIndex = INDEX_NONE;  // Which slot this enemy is assigned to
 	FVector AssignedSlotWorldPosition = FVector::ZeroVector;  // World position of assigned slot
 	bool bHasAssignedSlot = false;  // Does this enemy have a slot assigned?

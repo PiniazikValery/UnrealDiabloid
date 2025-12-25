@@ -34,13 +34,19 @@ protected:
 private:
 	// Query that filters entities for processing
 	FMassEntityQuery EntityQuery;
-	
-	// Cached player reference (avoid FindObject every frame)
-	TWeakObjectPtr<APawn> CachedPlayerPawn;
-	
+
+	// Cached player references (key = player index, avoid FindObject every frame)
+	TMap<int32, TWeakObjectPtr<APawn>> CachedPlayerPawns;
+
+	// Last time we refreshed the player list
+	float LastPlayerRefreshTime = 0.0f;
+
+	// How often to refresh the player list (in seconds)
+	float PlayerRefreshInterval = 1.0f;
+
 	// Cached slot manager subsystem
 	TWeakObjectPtr<UEnemySlotManagerSubsystem> CachedSlotManager;
-	
+
 	// Frame counter for LOD system
 	int32 FrameCounter = 0;
 };

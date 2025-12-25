@@ -42,8 +42,33 @@ struct FEnemySlot
 };
 
 /**
- * Manages slot allocation around the player for enemy positioning
- * Creates a formation system where enemies occupy discrete positions
+ * Per-player slot data container
+ * Each player has their own set of slots around them
+ */
+USTRUCT()
+struct FPlayerSlotData
+{
+	GENERATED_BODY()
+
+	// All available slots around this player
+	UPROPERTY()
+	TArray<FEnemySlot> Slots;
+
+	// Cached player location
+	FVector CachedPlayerLocation = FVector::ZeroVector;
+
+	// Cached player forward
+	FVector CachedPlayerForward = FVector::ForwardVector;
+
+	// Performance optimization: Cache slot validation results
+	float LastSlotUpdateTime = 0.0f;
+	float LastFullValidationTime = 0.0f;
+};
+
+/**
+ * Manages slot allocation around players for enemy positioning
+ * Creates a formation system where enemies occupy discrete positions around each player
+ * Supports multiplayer - each player has their own set of slots
  */
 UCLASS()
 class MYPROJECT_API UEnemySlotManagerSubsystem : public UWorldSubsystem
@@ -57,73 +82,90 @@ public:
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
 	/**
-	 * Update all slot world positions based on current player location
+	 * Update all slot world positions for a specific player
 	 * Should be called each frame before enemy movement processing
+	 * @param PlayerIndex Index of the player (0-3 typically)
+	 * @param PlayerLocation Current world location of the player
+	 * @param PlayerForward Current forward vector of the player
 	 */
-	void UpdateSlotPositions(const FVector& PlayerLocation, const FVector& PlayerForward);
+	void UpdateSlotPositions(int32 PlayerIndex, const FVector& PlayerLocation, const FVector& PlayerForward);
 
 	/**
-	 * Request a slot for an enemy entity
+	 * Request a slot for an enemy entity around a specific player
+	 * @param PlayerIndex Index of the player to get slots around
 	 * @param EntityHandle The entity requesting a slot
 	 * @param EntityLocation Current location of the requesting entity
 	 * @param OutSlotPosition The world position of the assigned slot
 	 * @return true if a slot was assigned, false if all slots are occupied
 	 */
-	bool RequestSlot(FMassEntityHandle EntityHandle, const FVector& EntityLocation, FVector& OutSlotPosition);
+	bool RequestSlot(int32 PlayerIndex, FMassEntityHandle EntityHandle, const FVector& EntityLocation, FVector& OutSlotPosition);
 
 	/**
-	 * Release a slot occupied by an entity
+	 * Release a slot occupied by an entity (searches all players)
 	 * @param EntityHandle The entity releasing its slot
 	 */
 	void ReleaseSlot(FMassEntityHandle EntityHandle);
 
 	/**
-	 * Release slot by slot index
+	 * Release slot by slot index for a specific player
+	 * @param PlayerIndex Index of the player
 	 * @param SlotIndex The index of the slot to release
 	 */
-	void ReleaseSlotByIndex(int32 SlotIndex);
+	void ReleaseSlotByIndex(int32 PlayerIndex, int32 SlotIndex);
 
 	/**
-	 * Get the world position of a specific slot
+	 * Get the world position of a specific slot for a player
+	 * @param PlayerIndex Index of the player
 	 * @param SlotIndex Index of the slot
 	 * @return World position of the slot, or ZeroVector if invalid
 	 */
-	FVector GetSlotWorldPosition(int32 SlotIndex) const;
+	FVector GetSlotWorldPosition(int32 PlayerIndex, int32 SlotIndex) const;
 
 	/**
-	 * Check if an entity has an assigned slot
+	 * Check if an entity has an assigned slot (searches all players)
 	 * @param EntityHandle The entity to check
+	 * @param OutPlayerIndex Output player index if found
 	 * @param OutSlotIndex Output slot index if found
 	 * @return true if entity has a slot assigned
 	 */
-	bool GetEntitySlot(FMassEntityHandle EntityHandle, int32& OutSlotIndex) const;
+	bool GetEntitySlot(FMassEntityHandle EntityHandle, int32& OutPlayerIndex, int32& OutSlotIndex) const;
 
 	/**
 	 * Get the current player location (cached)
+	 * @param PlayerIndex Index of the player
 	 */
-	FVector GetCachedPlayerLocation() const { return CachedPlayerLocation; }
+	FVector GetCachedPlayerLocation(int32 PlayerIndex) const;
 
 	/**
-	 * Get number of available (unoccupied) slots
+	 * Get number of available (unoccupied) slots for a player
+	 * @param PlayerIndex Index of the player
 	 */
-	int32 GetAvailableSlotCount() const;
+	int32 GetAvailableSlotCount(int32 PlayerIndex) const;
 
 	/**
 	 * Check if a slot is on valid NavMesh
+	 * @param PlayerIndex Index of the player
 	 * @param SlotIndex Index of the slot
 	 * @return true if slot is on NavMesh, false otherwise
 	 */
-	bool IsSlotOnNavMesh(int32 SlotIndex) const;
+	bool IsSlotOnNavMesh(int32 PlayerIndex, int32 SlotIndex) const;
 
 	/**
-	 * Get total number of slots
+	 * Get total number of slots per player
 	 */
-	int32 GetTotalSlotCount() const { return Slots.Num(); }
+	int32 GetTotalSlotCount() const { return MaxSlots; }
 
 	/**
-	 * Debug: Draw slot positions
+	 * Get number of active players being tracked
 	 */
-	void DebugDrawSlots(float Duration = 0.0f) const;
+	int32 GetActivePlayerCount() const { return PlayerSlotData.Num(); }
+
+	/**
+	 * Debug: Draw slot positions for a specific player
+	 * @param PlayerIndex Index of the player (-1 for all players)
+	 * @param Duration How long to display
+	 */
+	void DebugDrawSlots(int32 PlayerIndex = -1, float Duration = 0.0f) const;
 
 protected:
 	/**
@@ -159,37 +201,36 @@ protected:
 	 */
 	bool FindSafeSlotPosition(UNavigationSystemV1* NavSys, const FVector& PlayerLocation, const FVector& SlotDirection, float OriginalDistance, float RequiredClearance, FVector& OutPosition) const;
 
+	/**
+	 * Find the best available slot for an entity based on its position (internal helper)
+	 * @param Slots The slot array to search
+	 * @param EntityLocation Current location of the requesting entity
+	 */
+	int32 FindBestAvailableSlotInArray(const TArray<FEnemySlot>& Slots, const FVector& EntityLocation) const;
+
 private:
-	// All available slots around the player
+	// Per-player slot data (key = player index)
 	UPROPERTY()
-	TArray<FEnemySlot> Slots;
+	TMap<int32, FPlayerSlotData> PlayerSlotData;
 
-	// Cached player location
-	FVector CachedPlayerLocation = FVector::ZeroVector;
-
-	// Cached player forward
-	FVector CachedPlayerForward = FVector::ForwardVector;
-
-	// Performance optimization: Cache slot validation results
-	float LastSlotUpdateTime = 0.0f;
+	// Performance optimization intervals
 	float SlotUpdateInterval = 0.5f; // Update every 0.5 seconds instead of every frame
-	float LastFullValidationTime = 0.0f;
 	float FullValidationInterval = 2.0f; // Do expensive clearance checks every 2 seconds
 
 	// Configuration
-	
-	// Maximum number of slots to generate
+
+	// Maximum number of slots to generate per player
 	int32 MaxSlots = 500;
-	
+
 	// Distance of first ring from player
 	float FirstRingDistance = 100.0f;
-	
+
 	// Distance between rings
 	float RingSpacing = 60.0f;
-	
+
 	// Number of slots in the first ring (increases for outer rings)
 	int32 FirstRingSlotsCount = 8;
-	
+
 	// How many additional slots to add per ring
 	int32 SlotsIncreasePerRing = 4;
 

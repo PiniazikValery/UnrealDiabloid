@@ -8,6 +8,8 @@
 #include "NavigationPath.h"
 #include "CollisionQueryParams.h"
 #include "Engine/OverlapResult.h"
+#include "Engine/LocalPlayer.h"
+#include "GameFramework/PlayerController.h"
 #include "DrawDebugHelpers.h"
 
 // Enable detailed logging for movement debugging
@@ -66,14 +68,55 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 		return;
 	}
 
-	// Cache player reference
-	if (!CachedPlayerPawn.IsValid())
+	const float CurrentTime = World->GetTimeSeconds();
+	const float DeltaTime = Context.GetDeltaTimeSeconds();
+
+	// Periodically refresh the player list to handle players joining/leaving
+	if (CurrentTime - LastPlayerRefreshTime >= PlayerRefreshInterval || CachedPlayerPawns.Num() == 0)
 	{
-		CachedPlayerPawn = UGameplayStatics::GetPlayerPawn(World, 0);
-		if (!CachedPlayerPawn.IsValid())
+		LastPlayerRefreshTime = CurrentTime;
+		CachedPlayerPawns.Empty();
+
+		// Get all player controllers and cache their pawns
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			APlayerController* PC = It->Get();
+			if (PC && PC->GetPawn())
+			{
+				int32 PlayerIndex = 0;
+				// Try to get the player index from the local player
+				ULocalPlayer* LP = Cast<ULocalPlayer>(PC->Player);
+				if (LP)
+				{
+					PlayerIndex = LP->GetControllerId();
+				}
+				else
+				{
+					// For network players, use the order they appear
+					PlayerIndex = CachedPlayerPawns.Num();
+				}
+				CachedPlayerPawns.Add(PlayerIndex, PC->GetPawn());
+			}
+		}
+
+		if (CachedPlayerPawns.Num() == 0)
 		{
 			return;
 		}
+	}
+
+	// Validate cached players (some may have died or disconnected)
+	for (auto It = CachedPlayerPawns.CreateIterator(); It; ++It)
+	{
+		if (!It->Value.IsValid())
+		{
+			It.RemoveCurrent();
+		}
+	}
+
+	if (CachedPlayerPawns.Num() == 0)
+	{
+		return;
 	}
 
 	// Cache slot manager
@@ -87,14 +130,33 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 		}
 	}
 
-	const FVector PlayerLocation = CachedPlayerPawn->GetActorLocation();
-	const FVector PlayerForward = CachedPlayerPawn->GetActorForwardVector();
-	const float DeltaTime = Context.GetDeltaTimeSeconds();
 	UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(World);
 	UEnemySlotManagerSubsystem* SlotManager = CachedSlotManager.Get();
 
-	// Update all slot positions based on current player location
-	SlotManager->UpdateSlotPositions(PlayerLocation, PlayerForward);
+	// Build arrays for quick access to player data
+	TArray<int32> PlayerIndices;
+	TArray<FVector> PlayerLocations;
+	TArray<FVector> PlayerForwards;
+
+	for (const auto& Pair : CachedPlayerPawns)
+	{
+		if (Pair.Value.IsValid())
+		{
+			APawn* Pawn = Pair.Value.Get();
+			PlayerIndices.Add(Pair.Key);
+			PlayerLocations.Add(Pawn->GetActorLocation());
+			PlayerForwards.Add(Pawn->GetActorForwardVector());
+
+			// Update slot positions for this player
+			SlotManager->UpdateSlotPositions(Pair.Key, Pawn->GetActorLocation(), Pawn->GetActorForwardVector());
+		}
+	}
+
+	const int32 NumPlayers = PlayerIndices.Num();
+	if (NumPlayers == 0)
+	{
+		return;
+	}
 
 	// Debug draw slots periodically (not every frame to prevent performance issues)
 	// Note: DebugDrawSlots now uses persistent debug lines to avoid ComponentsThatNeedEndOfFrameUpdate crash
@@ -102,7 +164,7 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 	// Only draw every 5 frames to reduce overhead and prevent any timing issues
 	if (FrameCounter % 5 == 0)
 	{
-		SlotManager->DebugDrawSlots(-1.0f); // Duration -1 means one frame
+		SlotManager->DebugDrawSlots(-1, -1.0f); // PlayerIndex -1 means all players, Duration -1 means one frame
 	}
 #endif
 
@@ -110,7 +172,7 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 	if (EntityQuery.GetEntityManager() != nullptr)
 	{
 		EntityQuery.ForEachEntityChunk(Context,
-			[this, PlayerLocation, DeltaTime, World, NavSys, SlotManager, &EntityManager](FMassExecutionContext& Context)
+			[this, &PlayerIndices, &PlayerLocations, &PlayerForwards, NumPlayers, DeltaTime, World, NavSys, SlotManager, &EntityManager](FMassExecutionContext& Context)
 			{
 				const auto TransformList = Context.GetMutableFragmentView<FTransformFragment>();
 				const auto TargetList = Context.GetMutableFragmentView<FEnemyTargetFragment>();
@@ -133,18 +195,90 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 						// Release slot when enemy dies
 						if (Movement.bHasAssignedSlot)
 						{
-							SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotIndex);
+							SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
 							Movement.bHasAssignedSlot = false;
 							Movement.AssignedSlotIndex = INDEX_NONE;
+							Movement.AssignedSlotPlayerIndex = INDEX_NONE;
 						}
 						continue;
 					}
 
 					const FVector CurrentLocation = Transform.GetLocation();
 
-					// Update target data (still track player for reference)
+					// =====================================================
+					// PLAYER ASSIGNMENT: Assign enemy to nearest player or keep current
+					// =====================================================
+
+					// Update player switch cooldown
+					if (Target.PlayerSwitchCooldown > 0.0f)
+					{
+						Target.PlayerSwitchCooldown -= DeltaTime;
+					}
+
+					// Find which player this enemy should target
+					int32 TargetPlayerArrayIndex = 0;  // Index into our arrays
+					int32 TargetPlayerIndex = PlayerIndices[0];  // Actual player index
+
+					if (Target.TargetPlayerIndex != INDEX_NONE && Target.PlayerSwitchCooldown > 0.0f)
+					{
+						// Already have a target player and cooldown hasn't expired - keep it
+						// Find this player in our arrays
+						for (int32 p = 0; p < NumPlayers; ++p)
+						{
+							if (PlayerIndices[p] == Target.TargetPlayerIndex)
+							{
+								TargetPlayerArrayIndex = p;
+								TargetPlayerIndex = Target.TargetPlayerIndex;
+								break;
+							}
+						}
+					}
+					else
+					{
+						// Need to assign a player - find the nearest one
+						float NearestDistance = FLT_MAX;
+						for (int32 p = 0; p < NumPlayers; ++p)
+						{
+							float DistToPlayer = FVector::Dist(CurrentLocation, PlayerLocations[p]);
+							if (DistToPlayer < NearestDistance)
+							{
+								NearestDistance = DistToPlayer;
+								TargetPlayerArrayIndex = p;
+								TargetPlayerIndex = PlayerIndices[p];
+							}
+						}
+
+						// If switching to a different player, release old slot and set cooldown
+						if (Target.TargetPlayerIndex != TargetPlayerIndex)
+						{
+							if (Movement.bHasAssignedSlot && Movement.AssignedSlotPlayerIndex != TargetPlayerIndex)
+							{
+								SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
+								Movement.bHasAssignedSlot = false;
+								Movement.AssignedSlotIndex = INDEX_NONE;
+								Movement.AssignedSlotPlayerIndex = INDEX_NONE;
+								Movement.bAtSlotPosition = false;
+							}
+
+							Target.TargetPlayerIndex = TargetPlayerIndex;
+							Target.PlayerSwitchCooldown = 3.0f;  // Don't switch players for 3 seconds
+						}
+					}
+
+					// Get the target player's data
+					const FVector PlayerLocation = PlayerLocations[TargetPlayerArrayIndex];
+					const FVector PlayerForward = PlayerForwards[TargetPlayerArrayIndex];
+
+					// Get player pawn reference for target
+					APawn* TargetPlayerPawn = nullptr;
+					if (const TWeakObjectPtr<APawn>* PawnPtr = this->CachedPlayerPawns.Find(TargetPlayerIndex))
+					{
+						TargetPlayerPawn = PawnPtr->Get();
+					}
+
+					// Update target data
 					Target.TargetLocation = PlayerLocation;
-					Target.TargetActor = CachedPlayerPawn.Get();
+					Target.TargetActor = TargetPlayerPawn;
 					Target.DistanceToTarget = FVector::Dist(CurrentLocation, PlayerLocation);
 
 					const float DistanceToPlayer = Target.DistanceToTarget;
@@ -163,18 +297,20 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 					if (!Movement.bHasAssignedSlot || Movement.SlotReassignmentCooldown <= 0.0f)
 					{
 						FVector SlotPosition;
-						if (SlotManager->RequestSlot(EntityHandle, CurrentLocation, SlotPosition))
+						if (SlotManager->RequestSlot(TargetPlayerIndex, EntityHandle, CurrentLocation, SlotPosition))
 						{
 							// Get the slot index for this entity
+							int32 SlotPlayerIdx = INDEX_NONE;
 							int32 SlotIdx = INDEX_NONE;
-							SlotManager->GetEntitySlot(EntityHandle, SlotIdx);
+							SlotManager->GetEntitySlot(EntityHandle, SlotPlayerIdx, SlotIdx);
 
 							// Check if we got a different slot than before
-							if (Movement.AssignedSlotIndex != SlotIdx)
+							if (Movement.AssignedSlotIndex != SlotIdx || Movement.AssignedSlotPlayerIndex != SlotPlayerIdx)
 							{
 								Movement.bAtSlotPosition = false;  // Need to move to new slot
 							}
 
+							Movement.AssignedSlotPlayerIndex = SlotPlayerIdx;
 							Movement.AssignedSlotIndex = SlotIdx;
 							Movement.AssignedSlotWorldPosition = SlotPosition;
 							Movement.bHasAssignedSlot = true;
@@ -192,15 +328,16 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 					else
 					{
 						// Update slot world position (it moves with player)
-						Movement.AssignedSlotWorldPosition = SlotManager->GetSlotWorldPosition(Movement.AssignedSlotIndex);
-						
+						Movement.AssignedSlotWorldPosition = SlotManager->GetSlotWorldPosition(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
+
 						// Check if our current slot is still on navmesh (player may have moved near a building)
-						if (!SlotManager->IsSlotOnNavMesh(Movement.AssignedSlotIndex))
+						if (!SlotManager->IsSlotOnNavMesh(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex))
 						{
 							// Slot is now off navmesh - release it and request a new one
-							SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotIndex);
+							SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
 							Movement.bHasAssignedSlot = false;
 							Movement.bAtSlotPosition = false;
+							Movement.AssignedSlotPlayerIndex = INDEX_NONE;
 							Movement.SlotReassignmentCooldown = 0.0f; // Request new slot immediately
 							continue; // Skip to next entity, will get new slot next frame
 						}
@@ -520,7 +657,7 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 
 					FCollisionShape CapsuleShape = FCollisionShape::MakeCapsule(40.0f, 88.0f);
 					FCollisionQueryParams SweepParams;
-					SweepParams.AddIgnoredActor(CachedPlayerPawn.Get());
+					SweepParams.AddIgnoredActor(TargetPlayerPawn);
 
 					FVector DirectionToWaypoint = (Movement.CachedWaypoint - CurrentLocation);
 					DirectionToWaypoint.Z = 0.0f;

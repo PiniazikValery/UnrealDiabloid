@@ -6,14 +6,13 @@
 void UEnemySlotManagerSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	GenerateSlots();
-	
-	UE_LOG(LogTemp, Log, TEXT("EnemySlotManagerSubsystem: Initialized with %d slots"), Slots.Num());
+	// Slots are now generated per-player when UpdateSlotPositions is first called
+	UE_LOG(LogTemp, Log, TEXT("EnemySlotManagerSubsystem: Initialized (per-player slots will be generated on demand)"));
 }
 
 void UEnemySlotManagerSubsystem::Deinitialize()
 {
-	Slots.Empty();
+	PlayerSlotData.Empty();
 	Super::Deinitialize();
 }
 
@@ -25,26 +24,33 @@ bool UEnemySlotManagerSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 
 void UEnemySlotManagerSubsystem::GenerateSlots()
 {
+	// This function now generates slots into a provided array
+	// Called internally when a new player is added
+}
+
+// Helper to generate slots into an array
+static void GenerateSlotsIntoArray(TArray<FEnemySlot>& Slots, int32 MaxSlots, float FirstRingDistance, float RingSpacing, int32 FirstRingSlotsCount, int32 SlotsIncreasePerRing)
+{
 	Slots.Empty();
 	Slots.Reserve(MaxSlots);
-	
+
 	int32 SlotIndex = 0;
 	int32 RingIdx = 0;
-	
+
 	// Generate rings dynamically until we reach MaxSlots
 	while (SlotIndex < MaxSlots)
 	{
 		// Calculate ring distance: starts at FirstRingDistance, increases by RingSpacing each ring
 		const float RingDistance = FirstRingDistance + (RingIdx * RingSpacing);
-		
+
 		// Calculate number of slots in this ring: starts at FirstRingSlotsCount, increases each ring
 		const int32 NumSlotsInRing = FirstRingSlotsCount + (RingIdx * SlotsIncreasePerRing);
-		
+
 		const float AngleStep = 360.0f / NumSlotsInRing;
-		
+
 		// Priority increases with ring distance (inner rings are preferred)
 		const float BasePriority = static_cast<float>(RingIdx);
-		
+
 		for (int32 SlotInRing = 0; SlotInRing < NumSlotsInRing && SlotIndex < MaxSlots; ++SlotInRing)
 		{
 			FEnemySlot NewSlot;
@@ -52,7 +58,7 @@ void UEnemySlotManagerSubsystem::GenerateSlots()
 			NewSlot.AngleFromPlayerForward = SlotInRing * AngleStep;
 			NewSlot.DistanceFromPlayer = RingDistance;
 			NewSlot.bIsOccupied = false;
-			
+
 			// Priority: prefer front slots (angle close to 0 or 360) and inner rings
 			// Normalize angle to 0-180 range for priority calculation
 			float NormalizedAngle = NewSlot.AngleFromPlayerForward;
@@ -61,50 +67,64 @@ void UEnemySlotManagerSubsystem::GenerateSlots()
 				NormalizedAngle = 360.0f - NormalizedAngle;
 			}
 			NewSlot.Priority = BasePriority + (NormalizedAngle / 180.0f);
-			
+
 			Slots.Add(NewSlot);
 			SlotIndex++;
 		}
-		
+
 		RingIdx++;
 	}
-	
-	UE_LOG(LogTemp, Log, TEXT("EnemySlotManagerSubsystem: Generated %d slots across %d rings"), 
+
+	UE_LOG(LogTemp, Log, TEXT("EnemySlotManagerSubsystem: Generated %d slots across %d rings for player"),
 		Slots.Num(), RingIdx);
 }
 
-void UEnemySlotManagerSubsystem::UpdateSlotPositions(const FVector& PlayerLocation, const FVector& PlayerForward)
+void UEnemySlotManagerSubsystem::UpdateSlotPositions(int32 PlayerIndex, const FVector& PlayerLocation, const FVector& PlayerForward)
 {
+	// Get or create slot data for this player
+	FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (!SlotData)
+	{
+		// First time seeing this player - create slots for them
+		FPlayerSlotData NewSlotData;
+		GenerateSlotsIntoArray(NewSlotData.Slots, MaxSlots, FirstRingDistance, RingSpacing, FirstRingSlotsCount, SlotsIncreasePerRing);
+		PlayerSlotData.Add(PlayerIndex, MoveTemp(NewSlotData));
+		SlotData = PlayerSlotData.Find(PlayerIndex);
+		UE_LOG(LogTemp, Log, TEXT("EnemySlotManagerSubsystem: Created slot data for player %d"), PlayerIndex);
+	}
+
+	TArray<FEnemySlot>& Slots = SlotData->Slots;
+
 	// PERFORMANCE FIX: Only update slots every SlotUpdateInterval seconds
 	// This prevents 24,000+ NavMesh queries per frame near obstacles
 	const float CurrentTime = GetWorld()->GetTimeSeconds();
-	const float TimeSinceLastUpdate = CurrentTime - LastSlotUpdateTime;
-	
+	const float TimeSinceLastUpdate = CurrentTime - SlotData->LastSlotUpdateTime;
+
 	if (TimeSinceLastUpdate < SlotUpdateInterval)
 	{
 		// Too soon - skip expensive validation but still update positions with lightweight NavMesh projection
-		CachedPlayerLocation = PlayerLocation;
-		CachedPlayerForward = PlayerForward;
-		CachedPlayerForward.Z = 0.0f;
-		if (!CachedPlayerForward.IsNearlyZero())
+		SlotData->CachedPlayerLocation = PlayerLocation;
+		SlotData->CachedPlayerForward = PlayerForward;
+		SlotData->CachedPlayerForward.Z = 0.0f;
+		if (!SlotData->CachedPlayerForward.IsNearlyZero())
 		{
-			CachedPlayerForward.Normalize();
+			SlotData->CachedPlayerForward.Normalize();
 		}
 		else
 		{
-			CachedPlayerForward = FVector::ForwardVector;
+			SlotData->CachedPlayerForward = FVector::ForwardVector;
 		}
-		
+
 		// Quick position update with basic NavMesh projection (no clearance checks)
 		// Project ALL slots to NavMesh for correct Z, but skip expensive clearance validation
 		UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
 		const FVector NavSearchExtent(200.0f, 200.0f, 300.0f);
-		
+
 		for (FEnemySlot& Slot : Slots)
 		{
-			FVector SlotDirection = CachedPlayerForward.RotateAngleAxis(Slot.AngleFromPlayerForward, FVector::UpVector);
+			FVector SlotDirection = SlotData->CachedPlayerForward.RotateAngleAxis(Slot.AngleFromPlayerForward, FVector::UpVector);
 			FVector DesiredPosition = PlayerLocation + SlotDirection * Slot.DistanceFromPlayer;
-			
+
 			if (NavSys)
 			{
 				FNavLocation NavLoc;
@@ -131,49 +151,49 @@ void UEnemySlotManagerSubsystem::UpdateSlotPositions(const FVector& PlayerLocati
 		}
 		return;
 	}
-	
+
 	// Time to do a real update with NavMesh validation
-	LastSlotUpdateTime = CurrentTime;
-	
-	CachedPlayerLocation = PlayerLocation;
-	CachedPlayerForward = PlayerForward;
-	CachedPlayerForward.Z = 0.0f;
-	if (!CachedPlayerForward.IsNearlyZero())
+	SlotData->LastSlotUpdateTime = CurrentTime;
+
+	SlotData->CachedPlayerLocation = PlayerLocation;
+	SlotData->CachedPlayerForward = PlayerForward;
+	SlotData->CachedPlayerForward.Z = 0.0f;
+	if (!SlotData->CachedPlayerForward.IsNearlyZero())
 	{
-		CachedPlayerForward.Normalize();
+		SlotData->CachedPlayerForward.Normalize();
 	}
 	else
 	{
-		CachedPlayerForward = FVector::ForwardVector;
+		SlotData->CachedPlayerForward = FVector::ForwardVector;
 	}
-	
+
 	// Get NavSystem for validation
 	UNavigationSystemV1* NavSys = UNavigationSystemV1::GetCurrent(GetWorld());
 	const FVector NavSearchExtent(200.0f, 200.0f, 300.0f);  // Use larger extent to avoid fallback queries
-	
+
 	// Minimum clearance from nav mesh edge that an enemy needs to comfortably navigate
 	// Reduced from 150 to 100 for better slot availability
 	const float MinNavMeshClearance = 100.0f;
-	
+
 	// Determine if we should do expensive clearance checks this frame
-	const bool bDoFullValidation = (CurrentTime - LastFullValidationTime) >= FullValidationInterval;
+	const bool bDoFullValidation = (CurrentTime - SlotData->LastFullValidationTime) >= FullValidationInterval;
 	if (bDoFullValidation)
 	{
-		LastFullValidationTime = CurrentTime;
+		SlotData->LastFullValidationTime = CurrentTime;
 	}
-	
+
 	// Update world position for each slot
 	// OPTIMIZATION: Only validate slots that are occupied or near the player (within 400 units)
 	for (FEnemySlot& Slot : Slots)
 	{
 		// Rotate from player forward by the slot's angle
-		FVector SlotDirection = CachedPlayerForward.RotateAngleAxis(Slot.AngleFromPlayerForward, FVector::UpVector);
+		FVector SlotDirection = SlotData->CachedPlayerForward.RotateAngleAxis(Slot.AngleFromPlayerForward, FVector::UpVector);
 		FVector DesiredPosition = PlayerLocation + SlotDirection * Slot.DistanceFromPlayer;
-		
+
 		// Skip expensive validation for distant unoccupied slots
 		const bool bIsCloseToPlayer = Slot.DistanceFromPlayer <= 400.0f;
 		const bool bNeedsValidation = Slot.bIsOccupied || bIsCloseToPlayer;
-		
+
 		// Validate against NavMesh (only for relevant slots)
 		if (NavSys && bNeedsValidation)
 		{
@@ -187,7 +207,7 @@ void UEnemySlotManagerSubsystem::UpdateSlotPositions(const FVector& PlayerLocati
 				{
 					bHasClearance = HasNavMeshClearance(NavSys, NavLoc.Location, MinNavMeshClearance);
 				}
-				
+
 				if (bHasClearance)
 				{
 					// Slot is on NavMesh with good clearance
@@ -230,84 +250,137 @@ void UEnemySlotManagerSubsystem::UpdateSlotPositions(const FVector& PlayerLocati
 	}
 }
 
-bool UEnemySlotManagerSubsystem::RequestSlot(FMassEntityHandle EntityHandle, const FVector& EntityLocation, FVector& OutSlotPosition)
+bool UEnemySlotManagerSubsystem::RequestSlot(int32 PlayerIndex, FMassEntityHandle EntityHandle, const FVector& EntityLocation, FVector& OutSlotPosition)
 {
-	// Check if entity already has a slot
+	// Check if entity already has a slot with any player
+	int32 ExistingPlayerIndex = INDEX_NONE;
 	int32 ExistingSlotIndex = INDEX_NONE;
-	if (GetEntitySlot(EntityHandle, ExistingSlotIndex))
+	if (GetEntitySlot(EntityHandle, ExistingPlayerIndex, ExistingSlotIndex))
 	{
-		// Entity already has a slot - return its position
-		OutSlotPosition = Slots[ExistingSlotIndex].WorldPosition;
-		return true;
+		// Entity already has a slot
+		if (ExistingPlayerIndex == PlayerIndex)
+		{
+			// Same player - return its position
+			const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+			if (SlotData && ExistingSlotIndex >= 0 && ExistingSlotIndex < SlotData->Slots.Num())
+			{
+				OutSlotPosition = SlotData->Slots[ExistingSlotIndex].WorldPosition;
+				return true;
+			}
+		}
+		else
+		{
+			// Different player - release old slot first
+			ReleaseSlot(EntityHandle);
+		}
 	}
-	
+
+	// Get slot data for this player
+	const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (!SlotData)
+	{
+		// Player doesn't have slot data yet
+		OutSlotPosition = FVector::ZeroVector;
+		return false;
+	}
+
 	// Find best available slot
-	int32 BestSlotIndex = FindBestAvailableSlot(EntityLocation);
-	
+	int32 BestSlotIndex = FindBestAvailableSlotInArray(SlotData->Slots, EntityLocation);
+
 	if (BestSlotIndex == INDEX_NONE)
 	{
 		// No slots available - entity should move toward player anyway
-		OutSlotPosition = CachedPlayerLocation;
+		OutSlotPosition = SlotData->CachedPlayerLocation;
 		return false;
 	}
-	
-	// Assign the slot
-	Slots[BestSlotIndex].bIsOccupied = true;
-	Slots[BestSlotIndex].OccupyingEntity = EntityHandle;
-	OutSlotPosition = Slots[BestSlotIndex].WorldPosition;
-	
+
+	// Assign the slot (need non-const access)
+	FPlayerSlotData* MutableSlotData = PlayerSlotData.Find(PlayerIndex);
+	MutableSlotData->Slots[BestSlotIndex].bIsOccupied = true;
+	MutableSlotData->Slots[BestSlotIndex].OccupyingEntity = EntityHandle;
+	OutSlotPosition = MutableSlotData->Slots[BestSlotIndex].WorldPosition;
+
 	return true;
 }
 
 void UEnemySlotManagerSubsystem::ReleaseSlot(FMassEntityHandle EntityHandle)
 {
-	for (FEnemySlot& Slot : Slots)
+	// Search all players for this entity's slot
+	for (auto& Pair : PlayerSlotData)
 	{
-		if (Slot.bIsOccupied && Slot.OccupyingEntity == EntityHandle)
+		for (FEnemySlot& Slot : Pair.Value.Slots)
 		{
-			Slot.bIsOccupied = false;
-			Slot.OccupyingEntity = FMassEntityHandle();
-			return;
+			if (Slot.bIsOccupied && Slot.OccupyingEntity == EntityHandle)
+			{
+				Slot.bIsOccupied = false;
+				Slot.OccupyingEntity = FMassEntityHandle();
+				return;
+			}
 		}
 	}
 }
 
-void UEnemySlotManagerSubsystem::ReleaseSlotByIndex(int32 SlotIndex)
+void UEnemySlotManagerSubsystem::ReleaseSlotByIndex(int32 PlayerIndex, int32 SlotIndex)
 {
-	if (SlotIndex >= 0 && SlotIndex < Slots.Num())
+	FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (SlotData && SlotIndex >= 0 && SlotIndex < SlotData->Slots.Num())
 	{
-		Slots[SlotIndex].bIsOccupied = false;
-		Slots[SlotIndex].OccupyingEntity = FMassEntityHandle();
+		SlotData->Slots[SlotIndex].bIsOccupied = false;
+		SlotData->Slots[SlotIndex].OccupyingEntity = FMassEntityHandle();
 	}
 }
 
-FVector UEnemySlotManagerSubsystem::GetSlotWorldPosition(int32 SlotIndex) const
+FVector UEnemySlotManagerSubsystem::GetSlotWorldPosition(int32 PlayerIndex, int32 SlotIndex) const
 {
-	if (SlotIndex >= 0 && SlotIndex < Slots.Num())
+	const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (SlotData && SlotIndex >= 0 && SlotIndex < SlotData->Slots.Num())
 	{
-		return Slots[SlotIndex].WorldPosition;
+		return SlotData->Slots[SlotIndex].WorldPosition;
 	}
 	return FVector::ZeroVector;
 }
 
-bool UEnemySlotManagerSubsystem::GetEntitySlot(FMassEntityHandle EntityHandle, int32& OutSlotIndex) const
+bool UEnemySlotManagerSubsystem::GetEntitySlot(FMassEntityHandle EntityHandle, int32& OutPlayerIndex, int32& OutSlotIndex) const
 {
-	for (int32 i = 0; i < Slots.Num(); ++i)
+	// Search all players for this entity's slot
+	for (const auto& Pair : PlayerSlotData)
 	{
-		if (Slots[i].bIsOccupied && Slots[i].OccupyingEntity == EntityHandle)
+		const TArray<FEnemySlot>& Slots = Pair.Value.Slots;
+		for (int32 i = 0; i < Slots.Num(); ++i)
 		{
-			OutSlotIndex = i;
-			return true;
+			if (Slots[i].bIsOccupied && Slots[i].OccupyingEntity == EntityHandle)
+			{
+				OutPlayerIndex = Pair.Key;
+				OutSlotIndex = i;
+				return true;
+			}
 		}
 	}
+	OutPlayerIndex = INDEX_NONE;
 	OutSlotIndex = INDEX_NONE;
 	return false;
 }
 
-int32 UEnemySlotManagerSubsystem::GetAvailableSlotCount() const
+FVector UEnemySlotManagerSubsystem::GetCachedPlayerLocation(int32 PlayerIndex) const
 {
+	const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (SlotData)
+	{
+		return SlotData->CachedPlayerLocation;
+	}
+	return FVector::ZeroVector;
+}
+
+int32 UEnemySlotManagerSubsystem::GetAvailableSlotCount(int32 PlayerIndex) const
+{
+	const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (!SlotData)
+	{
+		return 0;
+	}
+
 	int32 Count = 0;
-	for (const FEnemySlot& Slot : Slots)
+	for (const FEnemySlot& Slot : SlotData->Slots)
 	{
 		if (!Slot.bIsOccupied)
 		{
@@ -317,16 +390,17 @@ int32 UEnemySlotManagerSubsystem::GetAvailableSlotCount() const
 	return Count;
 }
 
-bool UEnemySlotManagerSubsystem::IsSlotOnNavMesh(int32 SlotIndex) const
+bool UEnemySlotManagerSubsystem::IsSlotOnNavMesh(int32 PlayerIndex, int32 SlotIndex) const
 {
-	if (SlotIndex >= 0 && SlotIndex < Slots.Num())
+	const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+	if (SlotData && SlotIndex >= 0 && SlotIndex < SlotData->Slots.Num())
 	{
-		return Slots[SlotIndex].bIsOnNavMesh;
+		return SlotData->Slots[SlotIndex].bIsOnNavMesh;
 	}
 	return false;
 }
 
-int32 UEnemySlotManagerSubsystem::FindBestAvailableSlot(const FVector& EntityLocation) const
+int32 UEnemySlotManagerSubsystem::FindBestAvailableSlotInArray(const TArray<FEnemySlot>& Slots, const FVector& EntityLocation) const
 {
 	int32 BestSlotIndex = INDEX_NONE;
 	float BestScore = FLT_MAX;
@@ -512,7 +586,7 @@ bool UEnemySlotManagerSubsystem::FindSafeSlotPosition(UNavigationSystemV1* NavSy
 	return false;
 }
 
-void UEnemySlotManagerSubsystem::DebugDrawSlots(float Duration) const
+void UEnemySlotManagerSubsystem::DebugDrawSlots(int32 PlayerIndex, float Duration) const
 {
 #if ENABLE_DRAW_DEBUG
 	UWorld* World = GetWorld();
@@ -520,7 +594,7 @@ void UEnemySlotManagerSubsystem::DebugDrawSlots(float Duration) const
 	{
 		return;
 	}
-	
+
 	// IMPORTANT: Use persistent debug drawing to avoid crash with ComponentsThatNeedEndOfFrameUpdate_OnGameThread
 	// The crash occurs because non-persistent debug draws create temporary components that get tracked
 	// in an internal array, and when called from Mass processors during frame execution, the array
@@ -528,47 +602,75 @@ void UEnemySlotManagerSubsystem::DebugDrawSlots(float Duration) const
 	// Using bPersistent=true avoids this issue entirely.
 	const bool bPersistent = true;
 	const float ActualDuration = (Duration < 0.0f) ? 0.1f : Duration;
-	
+
 	// Flush previous persistent debug lines before drawing new ones
 	FlushPersistentDebugLines(World);
-	
-	// Draw ring circles around player - calculate ring distances dynamically
-	// Only draw first few rings to avoid clutter
-	const int32 MaxRingsToDraw = 10;
-	for (int32 RingIdx = 0; RingIdx < MaxRingsToDraw; ++RingIdx)
+
+	// Colors for different players
+	static const FColor PlayerColors[] = { FColor::Cyan, FColor::Magenta, FColor::Yellow, FColor::Orange };
+	const int32 NumPlayerColors = UE_ARRAY_COUNT(PlayerColors);
+
+	// Draw slots for specified player or all players
+	auto DrawPlayerSlots = [&](int32 PIdx, const FPlayerSlotData& SlotData)
 	{
-		float RingDist = FirstRingDistance + (RingIdx * RingSpacing);
-		DrawDebugCircle(World, CachedPlayerLocation, RingDist, 32, FColor::Cyan, bPersistent, ActualDuration, 0, 1.0f, FVector::RightVector, FVector::ForwardVector, false);
-	}
-	
-	// Draw all slots
-	for (const FEnemySlot& Slot : Slots)
+		FColor PlayerColor = PlayerColors[PIdx % NumPlayerColors];
+
+		// Draw ring circles around player - calculate ring distances dynamically
+		// Only draw first few rings to avoid clutter
+		const int32 MaxRingsToDraw = 10;
+		for (int32 RingIdx = 0; RingIdx < MaxRingsToDraw; ++RingIdx)
+		{
+			float RingDist = FirstRingDistance + (RingIdx * RingSpacing);
+			DrawDebugCircle(World, SlotData.CachedPlayerLocation, RingDist, 32, PlayerColor, bPersistent, ActualDuration, 0, 1.0f, FVector::RightVector, FVector::ForwardVector, false);
+		}
+
+		// Draw all slots
+		for (const FEnemySlot& Slot : SlotData.Slots)
+		{
+			// Skip drawing invalid slots that are off NavMesh
+			if (!Slot.bIsOnNavMesh)
+			{
+				// Draw invalid slots as small gray X
+				DrawDebugPoint(World, Slot.WorldPosition, 10.0f, FColor(80, 80, 80), bPersistent, ActualDuration);
+				continue;
+			}
+
+			if (Slot.bIsOccupied)
+			{
+				// Occupied slot - red sphere
+				DrawDebugSphere(World, Slot.WorldPosition, 30.0f, 8, FColor::Red, bPersistent, ActualDuration);
+			}
+			else
+			{
+				// Available slot - green sphere
+				DrawDebugSphere(World, Slot.WorldPosition, 25.0f, 6, FColor::Green, bPersistent, ActualDuration);
+			}
+
+			// Draw line from slot to player center
+			DrawDebugLine(World, Slot.WorldPosition, SlotData.CachedPlayerLocation, PlayerColor, bPersistent, ActualDuration, 0, 0.5f);
+		}
+
+		// Draw player center with forward direction
+		DrawDebugSphere(World, SlotData.CachedPlayerLocation, 40.0f, 8, FColor::White, bPersistent, ActualDuration);
+		DrawDebugDirectionalArrow(World, SlotData.CachedPlayerLocation, SlotData.CachedPlayerLocation + SlotData.CachedPlayerForward * 150.0f, 50.0f, PlayerColor, bPersistent, ActualDuration, 0, 3.0f);
+	};
+
+	if (PlayerIndex < 0)
 	{
-		// Skip drawing invalid slots that are off NavMesh
-		if (!Slot.bIsOnNavMesh)
+		// Draw all players
+		for (const auto& Pair : PlayerSlotData)
 		{
-			// Draw invalid slots as small gray X
-			DrawDebugPoint(World, Slot.WorldPosition, 10.0f, FColor(80, 80, 80), bPersistent, ActualDuration);
-			continue;
+			DrawPlayerSlots(Pair.Key, Pair.Value);
 		}
-		
-		if (Slot.bIsOccupied)
-		{
-			// Occupied slot - red sphere
-			DrawDebugSphere(World, Slot.WorldPosition, 30.0f, 8, FColor::Red, bPersistent, ActualDuration);
-		}
-		else
-		{
-			// Available slot - green sphere
-			DrawDebugSphere(World, Slot.WorldPosition, 25.0f, 6, FColor::Green, bPersistent, ActualDuration);
-		}
-		
-		// Draw line from slot to player center
-		DrawDebugLine(World, Slot.WorldPosition, CachedPlayerLocation, FColor::Cyan, bPersistent, ActualDuration, 0, 0.5f);
 	}
-	
-	// Draw player center with forward direction
-	DrawDebugSphere(World, CachedPlayerLocation, 40.0f, 8, FColor::White, bPersistent, ActualDuration);
-	DrawDebugDirectionalArrow(World, CachedPlayerLocation, CachedPlayerLocation + CachedPlayerForward * 150.0f, 50.0f, FColor::Yellow, bPersistent, ActualDuration, 0, 3.0f);
+	else
+	{
+		// Draw specific player
+		const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+		if (SlotData)
+		{
+			DrawPlayerSlots(PlayerIndex, *SlotData);
+		}
+	}
 #endif
 }
