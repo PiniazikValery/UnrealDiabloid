@@ -22,13 +22,10 @@ void AMyProjectGameState::BeginPlay()
 void AMyProjectGameState::ClientReceiveMassEntityBatch_Implementation(const FMassEntityBatchUpdate& BatchData)
 {
 	// This runs on clients only
-	// The reception processor will pick up this data and update local entities
-	// For now, just log for verification
+	// The replication subsystem will process this data and create/update client entities
 	UE_LOG(LogTemp, Verbose, TEXT("ClientReceiveMassEntityBatch: Received %d entities"), BatchData.Entities.Num());
 
-	// Note: The actual processing will be done by UEnemyNetworkReceptionProcessor
-	// which will query this data or be notified via a subsystem
-	// For Phase 1, we'll store this in the replication subsystem for the processor to consume
+	// Store in the replication subsystem for processing in ProcessClientReception()
 }
 
 void AMyProjectGameState::ClientNotifyEnemySpawn_Implementation(int32 NetworkID, FVector Location)
@@ -36,8 +33,8 @@ void AMyProjectGameState::ClientNotifyEnemySpawn_Implementation(int32 NetworkID,
 	// Spawn notification for clients
 	UE_LOG(LogTemp, Log, TEXT("ClientNotifyEnemySpawn: NetworkID=%d at %s"), NetworkID, *Location.ToString());
 
-	// The reception processor will create the local entity
-	// This will be implemented in the reception processor
+	// The replication subsystem will create the local entity
+	// This will be implemented in the subsystem's ProcessClientReception()
 }
 
 void AMyProjectGameState::MulticastEnemyDeath_Implementation(int32 NetworkID, FVector Location)
@@ -45,6 +42,6 @@ void AMyProjectGameState::MulticastEnemyDeath_Implementation(int32 NetworkID, FV
 	// Death notification to all clients
 	UE_LOG(LogTemp, Log, TEXT("MulticastEnemyDeath: NetworkID=%d at %s"), NetworkID, *Location.ToString());
 
-	// The reception processor will destroy the local entity
-	// This will be implemented when we add death synchronization in Phase 5
+	// The replication subsystem will destroy the local entity
+	// This will be implemented when we add death synchronization
 }

@@ -14,7 +14,7 @@ void AMyProjectPlayerController::BeginPlay()
 void AMyProjectPlayerController::ClientReceiveMassEntityBatch_Implementation(const FMassEntityBatchUpdate& BatchData)
 {
 	// This runs on the client only for THIS specific player controller
-	UE_LOG(LogTemp, Verbose, TEXT("ClientReceiveMassEntityBatch: Received %d entities"), BatchData.Entities.Num());
+	UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION] Client RPC: Received batch with %d entities"), BatchData.Entities.Num());
 
 	// Store batch data in the client-side replication subsystem for processing
 	// The reception processor will consume this data
@@ -23,7 +23,16 @@ void AMyProjectPlayerController::ClientReceiveMassEntityBatch_Implementation(con
 		if (UMassEnemyReplicationSubsystem* RepSubsystem = World->GetSubsystem<UMassEnemyReplicationSubsystem>())
 		{
 			RepSubsystem->StoreBatchForClient(this, BatchData);
+			UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION] Client RPC: Stored batch in subsystem"));
 		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Client RPC: No ReplicationSubsystem!"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Client RPC: No World!"));
 	}
 }
 

@@ -46,6 +46,15 @@ void AMassEnemySpawner::BeginPlay()
 	UE_LOG(LogTemp, Warning, TEXT("========================================"));
 	UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: BeginPlay called"));
 
+	// Only spawn on server - clients will receive replicated entities
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Log, TEXT("MassEnemySpawner: Running on client - skipping spawn initialization"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: Running on server - initializing spawner"));
+
 	// Validation
 	if (!EnemyEntityConfig)
 	{
@@ -179,6 +188,13 @@ void AMassEnemySpawner::SetupVisualization()
 
 void AMassEnemySpawner::StartSpawning()
 {
+	// Only spawn on server
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: StartSpawning called on client - ignoring"));
+		return;
+	}
+
 	if (!EnemyEntityConfig)
 	{
 		UE_LOG(LogTemp, Error, TEXT("MassEnemySpawner: Cannot start spawning - no config set"));
@@ -222,6 +238,13 @@ void AMassEnemySpawner::StopSpawning()
 void AMassEnemySpawner::SpawnWave()
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(TEXT("MassEnemySpawner::SpawnWave"));
+
+	// Only spawn on server
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: SpawnWave called on client - ignoring"));
+		return;
+	}
 
 	// Cleanup invalid entities first
 	CleanupInvalidEntities();
@@ -278,6 +301,13 @@ void AMassEnemySpawner::SpawnWave()
 
 void AMassEnemySpawner::SpawnSingleEnemy(const FVector& Location)
 {
+	// Only spawn on server
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: SpawnSingleEnemy called on client - ignoring"));
+		return;
+	}
+
 	if (GetActiveEnemyCount() >= MaxEnemies)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: Cannot spawn - max limit reached"));
@@ -526,6 +556,13 @@ void AMassEnemySpawner::CleanupInvalidEntities()
 
 void AMassEnemySpawner::DespawnAllEnemies()
 {
+	// Only despawn on server
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MassEnemySpawner: DespawnAllEnemies called on client - ignoring"));
+		return;
+	}
+
 	UWorld* World = GetWorld();
 	if (!World) return;
 

@@ -11,7 +11,9 @@
       "Bash(\"C:\\\\Program Files\\\\Epic Games\\\\UE_5.6\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" MyProjectEditor Win64 Development \"C:\\\\Users\\\\Valery\\\\Documents\\\\Unreal Projects\\\\MyProject\\\\MyProject.uproject\" -WaitMutex)",
       "Bash(dir \"C:\\\\Users\\\\Valery\\\\Documents\\\\Unreal Projects\\\\MyProject\\\\Intermediate\\\\Build\\\\Win64\\\\x64\\\\UnrealEditor\\\\Development\\\\MyProject\")",
       "Bash(findstr:*)",
-      "Bash(more:*)"
+      "Bash(more:*)",
+      "Bash(dir:*)",
+      "Bash(git rm:*)"
     ],
     "deny": [],
     "ask": []

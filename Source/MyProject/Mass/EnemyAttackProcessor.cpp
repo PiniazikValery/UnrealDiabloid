@@ -29,6 +29,12 @@ void UEnemyAttackProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 	const float DeltaTime = Context.GetDeltaTimeSeconds();
 	UWorld*		World = EntityManager.GetWorld();
 
+	// Only run on server - client entities show attack animations via replication
+	if (!World || World->GetNetMode() == NM_Client)
+	{
+		return;
+	}
+
 	if (EntityQuery.GetEntityManager() != nullptr)
 	{
 		EntityQuery.ForEachEntityChunk(Context,

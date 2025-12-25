@@ -37,8 +37,7 @@ private:
 		const FEnemyStateFragment& State,
 		const FEnemyMovementFragment& Movement,
 		const FEnemyAttackFragment& Attack,
-		FEnemyNetworkFragment& Network,
-		float DeltaTime);
+		FEnemyNetworkFragment& Network);
 
 	/**
 	 * Compress entity state for network transmission
@@ -58,6 +57,11 @@ private:
 	// Query for entities that need replication
 	FMassEntityQuery EntityQuery;
 
-	// Maximum entities per batch (50 = ~1650 bytes per packet)
-	int32 MaxEntitiesPerBatch = 50;
+	// Maximum entities per batch (500 = ~16,500 bytes per packet)
+	int32 MaxEntitiesPerBatch = 500;
+
+	// Per-client replication timing (no UPROPERTY - nested TMap not supported by reflection)
+	TMap<int32, TMap<int32, float>> PerClientEntityTimers;  // ClientIndex -> (NetworkID -> LastSendTime)
+	TMap<APlayerController*, int32> ClientIndexMap;
+	int32 NextClientIndex = 0;
 };

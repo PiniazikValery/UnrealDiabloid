@@ -290,4 +290,16 @@ struct MYPROJECT_API FEnemyNetworkFragment : public FMassFragment
 	// Prediction data (for client interpolation)
 	FVector_NetQuantize ReplicatedVelocity = FVector::ZeroVector;    // For client prediction
 	int16 TargetPlayerIndex = -1;              // Which player this enemy targets (-1 = none)
+
+	// CLIENT-SIDE INTERPOLATION DATA
+	FVector PreviousPosition = FVector::ZeroVector;
+	FVector TargetPosition = FVector::ZeroVector;
+	FVector PreviousVelocity = FVector::ZeroVector;
+	FVector TargetVelocity = FVector::ZeroVector;
+	float PreviousYaw = 0.0f;
+	float TargetYaw = 0.0f;
+	float InterpolationAlpha = 1.0f;           // 0 = at previous, 1 = at target
+	float TimeSinceLastUpdate = 0.0f;
+	float ExpectedUpdateInterval = 0.1f;       // Estimated time between server updates
+	bool bHasReceivedFirstUpdate = false;
 };

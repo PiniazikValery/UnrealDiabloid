@@ -43,6 +43,9 @@ struct FCompressedEnemyState
 	UPROPERTY()
 	int16 TargetPlayerIndex = -1;
 
+	// Transient priority for sorting (not replicated over network)
+	uint8 Priority = 0;
+
 	// Helper functions for flag manipulation
 	bool IsAlive() const { return (Flags & (1 << 0)) != 0; }
 	bool IsAttacking() const { return (Flags & (1 << 1)) != 0; }

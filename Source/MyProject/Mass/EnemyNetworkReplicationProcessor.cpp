@@ -10,9 +10,10 @@
 #include "Engine/World.h"
 
 UEnemyNetworkReplicationProcessor::UEnemyNetworkReplicationProcessor()
+    : EntityQuery(*this)
 {
 	// Run on server only
-	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::Server);
+	ExecutionFlags = static_cast<int32>(EProcessorExecutionFlags::All);
 
 	// Run in PrePhysics phase (same as movement processor)
 	ProcessingPhase = EMassProcessingPhase::PrePhysics;
@@ -24,8 +25,8 @@ UEnemyNetworkReplicationProcessor::UEnemyNetworkReplicationProcessor()
 void UEnemyNetworkReplicationProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
 {
 	// Only configure if not already configured (prevents PIE crash)
-	if (EntityQuery.GetRequirements().IsEmpty())
-	{
+	// if (EntityQuery.GetRequirements().IsEmpty())
+	// {
 		// Configure query - all alive enemies with network fragment
 		EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 		EntityQuery.AddRequirement<FEnemyStateFragment>(EMassFragmentAccess::ReadOnly);
@@ -35,21 +36,21 @@ void UEnemyNetworkReplicationProcessor::ConfigureQueries(const TSharedRef<FMassE
 		EntityQuery.AddRequirement<FEnemyTargetFragment>(EMassFragmentAccess::ReadOnly);
 		EntityQuery.AddTagRequirement<FEnemyTag>(EMassFragmentPresence::All);
 		EntityQuery.AddTagRequirement<FEnemyDeadTag>(EMassFragmentPresence::None);  // Exclude dead enemies
-	}
+	// }
 }
 
 void UEnemyNetworkReplicationProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	// Get subsystem
-	UMassEnemyReplicationSubsystem* ReplicationSubsystem = GetWorld()->GetSubsystem<UMassEnemyReplicationSubsystem>();
-	if (!ReplicationSubsystem)
+	// Only run on server
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_Client)
 	{
 		return;
 	}
 
-	// Get GameState for sending RPCs
-	AMyProjectGameState* GameState = GetWorld()->GetGameState<AMyProjectGameState>();
-	if (!GameState)
+	// Get subsystem
+	UMassEnemyReplicationSubsystem* ReplicationSubsystem = World->GetSubsystem<UMassEnemyReplicationSubsystem>();
+	if (!ReplicationSubsystem)
 	{
 		return;
 	}
@@ -58,21 +59,55 @@ void UEnemyNetworkReplicationProcessor::Execute(FMassEntityManager& EntityManage
 	TArray<APlayerController*> AllPlayers = ReplicationSubsystem->GetAllPlayerControllers();
 	if (AllPlayers.Num() == 0)
 	{
-		return;  // No clients to replicate to
+		return;
 	}
 
-	// Per-client batches
-	TMap<APlayerController*, TArray<FCompressedEnemyState>> ClientBatches;
+	// Build stable client indices (persistent across frames)
+	for (APlayerController* PC : AllPlayers)
+	{
+		if (!ClientIndexMap.Contains(PC))
+		{
+			ClientIndexMap.Add(PC, NextClientIndex++);
+		}
+	}
+
+	// Clean up disconnected clients from ClientIndexMap
+	TArray<APlayerController*> DisconnectedClients;
+	for (const auto& Pair : ClientIndexMap)
+	{
+		if (!AllPlayers.Contains(Pair.Key))
+		{
+			DisconnectedClients.Add(Pair.Key);
+		}
+	}
+	for (APlayerController* DC : DisconnectedClients)
+	{
+		int32 ClientIdx = ClientIndexMap[DC];
+		ClientIndexMap.Remove(DC);
+		PerClientEntityTimers.Remove(ClientIdx);
+	}
 
 	// Initialize batches for each client
+	TMap<APlayerController*, TArray<FCompressedEnemyState>> ClientBatches;
 	for (APlayerController* PC : AllPlayers)
 	{
 		ClientBatches.Add(PC, TArray<FCompressedEnemyState>());
 	}
 
-	float DeltaTime = Context.GetDeltaTimeSeconds();
+	// Get current world time (absolute time, not delta)
+	const float CurrentTime = World->GetTimeSeconds();
 
-	// Process entities
+	// Precompute player locations to avoid repeated GetPawn() calls inside loop
+	TMap<APlayerController*, FVector> PlayerLocations;
+	for (APlayerController* PC : AllPlayers)
+	{
+		if (PC && PC->GetPawn())
+		{
+			PlayerLocations.Add(PC, PC->GetPawn()->GetActorLocation());
+		}
+	}
+
+	// Process all entities
 	EntityQuery.ForEachEntityChunk(Context, [&, this](FMassExecutionContext& Context)
 	{
 		const int32 NumEntities = Context.GetNumEntities();
@@ -90,7 +125,6 @@ void UEnemyNetworkReplicationProcessor::Execute(FMassEntityManager& EntityManage
 			const FEnemyMovementFragment& Movement = Movements[EntityIndex];
 			const FEnemyAttackFragment& Attack = Attacks[EntityIndex];
 			FEnemyNetworkFragment& Network = Networks[EntityIndex];
-			const FEnemyTargetFragment& Target = Targets[EntityIndex];
 
 			// Assign NetworkID if needed
 			if (Network.NetworkID == INDEX_NONE)
@@ -98,51 +132,105 @@ void UEnemyNetworkReplicationProcessor::Execute(FMassEntityManager& EntityManage
 				Network.NetworkID = ReplicationSubsystem->AssignNetworkID();
 			}
 
-			// Update network fragment
-			UpdateNetworkFragment(Transform, State, Movement, Attack, Network, DeltaTime);
+			// Update network fragment data (position, rotation, health, flags, velocity)
+			UpdateNetworkFragment(Transform, State, Movement, Attack, Network);
 
-			// Check relevancy to each client
-			TArray<APlayerController*> RelevantPlayers;
 			FVector EntityLocation = Transform.GetTransform().GetLocation();
+			bool bRelevantToAny = false;
 
-			if (ReplicationSubsystem->IsEntityRelevant(EntityLocation, RelevantPlayers))
+			// Check EACH client independently - this is the key fix
+			for (APlayerController* PC : AllPlayers)
 			{
-				Network.bIsRelevantToAnyClient = true;
-
-				// For each relevant client, check if update is needed
-				for (APlayerController* PC : RelevantPlayers)
+				// Get player location
+				FVector* PlayerLocationPtr = PlayerLocations.Find(PC);
+				if (!PlayerLocationPtr)
 				{
-					if (!PC || !PC->GetPawn())
-						continue;
-
-					FVector PlayerLocation = PC->GetPawn()->GetActorLocation();
-					float Distance = FVector::Dist(EntityLocation, PlayerLocation);
-					float RequiredInterval = ReplicationSubsystem->GetReplicationInterval(Distance);
-
-					// Check if enough time has passed since last replication
-					if (Network.TimeSinceLastReplication >= RequiredInterval)
-					{
-						// Update priority
-						Network.ReplicationPriority = ReplicationSubsystem->CalculateReplicationPriority(EntityLocation, PlayerLocation);
-
-						// Add to client's batch
-						FCompressedEnemyState CompressedState = CompressEntityState(Transform, State, Movement, Attack, Network);
-						ClientBatches[PC].Add(CompressedState);
-					}
+					continue;
 				}
 
-				// Reset timer if we replicated to at least one client
-				if (Network.TimeSinceLastReplication >= ReplicationSubsystem->GetReplicationInterval(0.0f))
+				FVector PlayerLocation = *PlayerLocationPtr;
+				float Distance = FVector::Dist(EntityLocation, PlayerLocation);
+
+				// Check relevancy - skip if outside radius
+				if (Distance > ReplicationSubsystem->GetRelevancyRadius())
 				{
-					Network.TimeSinceLastReplication = 0.0f;
+					continue;
+				}
+
+				bRelevantToAny = true;
+
+				// Get required interval for THIS client based on distance
+				float RequiredInterval = ReplicationSubsystem->GetReplicationInterval(Distance);
+
+				// Get per-client, per-entity timer
+				int32 ClientIdx = ClientIndexMap[PC];
+				TMap<int32, float>& EntityTimers = PerClientEntityTimers.FindOrAdd(ClientIdx);
+				float* LastSendTimePtr = EntityTimers.Find(Network.NetworkID);
+
+				// Calculate time since last send to THIS client
+				// If never sent, use large value to force immediate send
+				float TimeSinceLastSend;
+				if (LastSendTimePtr)
+				{
+					TimeSinceLastSend = CurrentTime - *LastSendTimePtr;
+				}
+				else
+				{
+					TimeSinceLastSend = RequiredInterval + 1.0f;  // Force first send
+				}
+
+				// Check if enough time has passed FOR THIS SPECIFIC CLIENT
+				if (TimeSinceLastSend >= RequiredInterval)
+				{
+					// Calculate priority based on distance
+					uint8 Priority = ReplicationSubsystem->CalculateReplicationPriority(EntityLocation, PlayerLocation);
+
+					// Compress entity state
+					FCompressedEnemyState CompressedState = CompressEntityState(Transform, State, Movement, Attack, Network);
+					CompressedState.Priority = Priority;
+
+					// Add to THIS client's batch
+					ClientBatches[PC].Add(CompressedState);
+
+					// Update timer ONLY for this client-entity pair (use [] to overwrite existing)
+					EntityTimers.FindOrAdd(Network.NetworkID) = CurrentTime;
 				}
 			}
-			else
-			{
-				Network.bIsRelevantToAnyClient = false;
-			}
+
+			Network.bIsRelevantToAnyClient = bRelevantToAny;
 		}
 	});
+
+	// Sort each client's batch by priority (highest priority first)
+	for (auto& Pair : ClientBatches)
+	{
+		Pair.Value.Sort([](const FCompressedEnemyState& A, const FCompressedEnemyState& B)
+		{
+			return A.Priority > B.Priority;  // Descending - higher priority first
+		});
+	}
+
+	// Log batch collection summary with details per client
+	int32 TotalEntities = 0;
+	for (const auto& Pair : ClientBatches)
+	{
+		TotalEntities += Pair.Value.Num();
+		if (Pair.Value.Num() > 0)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION-LAG] Server: Client %s - queued %d entities"),
+				*Pair.Key->GetName(), Pair.Value.Num());
+		}
+	}
+
+	if (TotalEntities > 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION-LAG] Server: Total %d entities for %d clients"),
+			TotalEntities, ClientBatches.Num());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION-LAG] Server: NO entities collected! Check relevancy/timing logic"));
+	}
 
 	// Send batches to clients
 	SendBatchesToClients(ClientBatches);
@@ -153,13 +241,11 @@ void UEnemyNetworkReplicationProcessor::UpdateNetworkFragment(
 	const FEnemyStateFragment& State,
 	const FEnemyMovementFragment& Movement,
 	const FEnemyAttackFragment& Attack,
-	FEnemyNetworkFragment& Network,
-	float DeltaTime)
+	FEnemyNetworkFragment& Network)
 {
-	// Update timer
-	Network.TimeSinceLastReplication += DeltaTime;
+	// NOTE: No timer logic here anymore - timers are handled per-client in Execute()
 
-	// Update compressed state
+	// Update position
 	FVector Location = Transform.GetTransform().GetLocation();
 	Network.ReplicatedPosition = Location;
 
@@ -171,7 +257,7 @@ void UEnemyNetworkReplicationProcessor::UpdateNetworkFragment(
 	// Compress health (0-100 to 0-255)
 	Network.ReplicatedHealth = static_cast<uint8>(FMath::Clamp(State.Health / 100.0f * 255.0f, 0.0f, 255.0f));
 
-	// Pack flags
+	// Pack boolean flags into single byte
 	Network.ReplicatedFlags = 0;
 	if (State.bIsAlive)
 		Network.ReplicatedFlags |= (1 << 0);
@@ -180,10 +266,10 @@ void UEnemyNetworkReplicationProcessor::UpdateNetworkFragment(
 	if (State.bIsMoving)
 		Network.ReplicatedFlags |= (1 << 2);
 
-	// Store velocity for client prediction
+	// Store velocity for client-side prediction
 	Network.ReplicatedVelocity = Movement.Velocity;
 
-	// Target player index will be set in Phase 2
+	// Target player index (set elsewhere if needed)
 	Network.TargetPlayerIndex = -1;
 }
 
@@ -211,10 +297,20 @@ void UEnemyNetworkReplicationProcessor::SendBatchesToClients(const TMap<APlayerC
 	UWorld* World = GetWorld();
 	if (!World)
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] SendBatchesToClients: No World!"));
 		return;
 	}
 
-	// Send batches to each client via their PlayerController
+	// Get replication subsystem
+	UMassEnemyReplicationSubsystem* RepSubsystem = World->GetSubsystem<UMassEnemyReplicationSubsystem>();
+	if (!RepSubsystem)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] SendBatchesToClients: No ReplicationSubsystem!"));
+		return;
+	}
+
+	// Queue batches for sending on game thread
+	// This is thread-safe and can be called from MASS worker thread
 	for (const auto& Pair : ClientBatches)
 	{
 		APlayerController* Client = Pair.Key;
@@ -223,11 +319,7 @@ void UEnemyNetworkReplicationProcessor::SendBatchesToClients(const TMap<APlayerC
 		if (!Client || Entities.Num() == 0)
 			continue;
 
-		// Cast to our custom PlayerController
-		AMyProjectPlayerController* MyPC = Cast<AMyProjectPlayerController>(Client);
-		if (!MyPC)
-			continue;
-
+		int32 BatchCount = 0;
 		// Split into batches of MaxEntitiesPerBatch
 		for (int32 StartIndex = 0; StartIndex < Entities.Num(); StartIndex += MaxEntitiesPerBatch)
 		{
@@ -239,8 +331,12 @@ void UEnemyNetworkReplicationProcessor::SendBatchesToClients(const TMap<APlayerC
 				Batch.Entities.Add(Entities[i]);
 			}
 
-			// Send RPC to this specific client via PlayerController
-			MyPC->ClientReceiveMassEntityBatch(Batch);
+			// Queue for sending on game thread (thread-safe)
+			RepSubsystem->QueueBatchForSending(Client, Batch);
+			BatchCount++;
 		}
+
+		UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION] Server: Queued %d batches (%d entities) for client %s"),
+			BatchCount, Entities.Num(), *Client->GetName());
 	}
 }
