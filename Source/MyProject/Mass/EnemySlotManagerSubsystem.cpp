@@ -260,11 +260,53 @@ bool UEnemySlotManagerSubsystem::RequestSlot(int32 PlayerIndex, FMassEntityHandl
 		// Entity already has a slot
 		if (ExistingPlayerIndex == PlayerIndex)
 		{
-			// Same player - return its position
-			const FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
+			// Same player - check if a better (closer to player) slot is available
+			FPlayerSlotData* SlotData = PlayerSlotData.Find(PlayerIndex);
 			if (SlotData && ExistingSlotIndex >= 0 && ExistingSlotIndex < SlotData->Slots.Num())
 			{
-				OutSlotPosition = SlotData->Slots[ExistingSlotIndex].WorldPosition;
+				const FEnemySlot& CurrentSlot = SlotData->Slots[ExistingSlotIndex];
+
+				// Find the best available slot (excluding our current one)
+				int32 BestSlotIndex = INDEX_NONE;
+				float BestSlotDistanceFromPlayer = FLT_MAX;
+
+				for (int32 i = 0; i < SlotData->Slots.Num(); ++i)
+				{
+					const FEnemySlot& Slot = SlotData->Slots[i];
+
+					// Skip occupied slots (but our current slot is occupied by us, so skip it too)
+					if (Slot.bIsOccupied || !Slot.bIsOnNavMesh)
+					{
+						continue;
+					}
+
+					// Check if this slot is closer to the player than our current slot
+					if (Slot.DistanceFromPlayer < BestSlotDistanceFromPlayer)
+					{
+						BestSlotDistanceFromPlayer = Slot.DistanceFromPlayer;
+						BestSlotIndex = i;
+					}
+				}
+
+				// If we found a slot that's significantly closer to the player, switch to it
+				// Use a threshold to avoid constant slot swapping (at least one ring closer)
+				const float MinImprovementThreshold = RingSpacing * 0.8f; // ~80% of ring spacing
+				if (BestSlotIndex != INDEX_NONE &&
+					(CurrentSlot.DistanceFromPlayer - BestSlotDistanceFromPlayer) >= MinImprovementThreshold)
+				{
+					// Release current slot
+					SlotData->Slots[ExistingSlotIndex].bIsOccupied = false;
+					SlotData->Slots[ExistingSlotIndex].OccupyingEntity = FMassEntityHandle();
+
+					// Assign the better slot
+					SlotData->Slots[BestSlotIndex].bIsOccupied = true;
+					SlotData->Slots[BestSlotIndex].OccupyingEntity = EntityHandle;
+					OutSlotPosition = SlotData->Slots[BestSlotIndex].WorldPosition;
+					return true;
+				}
+
+				// No better slot available, keep current
+				OutSlotPosition = CurrentSlot.WorldPosition;
 				return true;
 			}
 		}
