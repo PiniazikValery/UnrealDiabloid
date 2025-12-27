@@ -364,7 +364,9 @@ void UDodge::ServerStartDodge(const FVector& Direction)
 
 void UDodge::ClientNotifyDodgeStateChanged_Implementation(bool bNewIsDodging)
 {
-	UE_LOG(LogTemp, Warning, TEXT("CLIENT: ClientNotifyDodgeStateChanged called - bNewIsDodging: %s"), bNewIsDodging ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogTemp, Warning, TEXT("CLIENT: ClientNotifyDodgeStateChanged called - bNewIsDodging: %s, already dodging: %s"),
+        bNewIsDodging ? TEXT("true") : TEXT("false"),
+        MovementComponent && MovementComponent->bIsDodging ? TEXT("true") : TEXT("false"));
     
     // Add comprehensive null and validity checks to prevent access violations
     if (!MovementComponent)
@@ -393,8 +395,17 @@ void UDodge::ClientNotifyDodgeStateChanged_Implementation(bool bNewIsDodging)
     // Sync dodge state and movement mode with server
     if (bNewIsDodging)
     {
-        UE_LOG(LogTemp, Warning, TEXT("CLIENT: Server confirmed dodge start - starting dodge on client"));
-        
+        // Check if client already started dodge via prediction
+        if (MovementComponent->bIsDodging)
+        {
+            // Client already predicted this - server confirmed, just sync timer if needed
+            UE_LOG(LogTemp, Warning, TEXT("CLIENT: Server confirmed dodge - client prediction was correct"));
+            bClientHasPredictedDodgeEnd = false;
+            return;
+        }
+
+        UE_LOG(LogTemp, Warning, TEXT("CLIENT: Server confirmed dodge start - starting dodge on client (no prediction)"));
+
         // Rotate character to face dodge direction before disabling rotation
         RotateToDodgeDirection();
         

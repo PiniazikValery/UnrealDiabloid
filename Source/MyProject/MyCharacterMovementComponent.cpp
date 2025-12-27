@@ -259,13 +259,39 @@ void UMyCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float Del
             }
             else
             {
-                // CLIENT: Don't start dodge until server confirms
-                // Just clear the flag and wait for server RPC to actually start the dodge
-                DodgeObject->bWantsToDodge = false; // Clear flag immediately
-                
-                // Set waiting for sync so we don't spam requests
+                // CLIENT: Start dodge immediately for client-side prediction
+                // Server will validate and correct if needed
+
+                // Rotate character to face dodge direction before disabling rotation
+                RotateToDodgeDirection();
+
+                // Disable rotation during dodge
+                DisableRotationDuringDodge();
+
+                // Initialize position tracking for dodge direction
+                if (CharacterOwner)
+                {
+                    DodgeObject->PreviousDodgePosition = CharacterOwner->GetActorLocation();
+                    DodgeObject->bHasInitializedDodgePosition = true;
+                }
+
+                // Set custom movement mode for immediate response
+                SetMovementMode(MOVE_Custom, ECustomMovementMode::CMOVE_Dodge);
+                bIsDodging = true;
+                DodgeObject->DodgeTimer = DodgeObject->DodgeDuration;
+                DodgeCooldownTimer = DodgeObject->DodgeCooldown;
+
+                // Play dodge animation locally
+                PlayDodgeMontage();
+
+                // Clear the flag
+                DodgeObject->bWantsToDodge = false;
+
+                // Set waiting for sync so server can correct if needed
                 DodgeObject->bWaitingForServerSync = true;
                 DodgeObject->LastServerSyncTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+
+                UE_LOG(LogTemp, Warning, TEXT("CLIENT: Started dodge with client-side prediction"));
             }
             
             // Server clears the flag after processing
