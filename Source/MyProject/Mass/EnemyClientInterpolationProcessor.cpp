@@ -120,7 +120,11 @@ void UEnemyClientInterpolationProcessor::Execute(FMassEntityManager& EntityManag
 				float SmoothAlpha = FMath::SmoothStep(0.0f, 1.0f, Network.InterpolationAlpha);
 
 				NewPosition = FMath::Lerp(Network.PreviousPosition, Network.TargetPosition, SmoothAlpha);
-				NewYaw = FMath::Lerp(Network.PreviousYaw, Network.TargetYaw, SmoothAlpha);
+
+				// Use proper angular interpolation to handle wrap-around at ±180°
+				// FindDeltaAngleDegrees returns the shortest path between angles
+				float DeltaYaw = FMath::FindDeltaAngleDegrees(Network.PreviousYaw, Network.TargetYaw);
+				NewYaw = Network.PreviousYaw + (DeltaYaw * SmoothAlpha);
 			}
 			else
 			{
