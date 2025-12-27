@@ -60,6 +60,17 @@ void UEnemyAttackProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 
 					const float DistanceToTarget = Target.DistanceToTarget;
 
+					// Update attack duration timer (for animation tracking)
+					if (Attack.bIsAttacking && Attack.AttackTimeRemaining > 0.0f)
+					{
+						Attack.AttackTimeRemaining -= DeltaTime;
+						if (Attack.AttackTimeRemaining <= 0.0f)
+						{
+							Attack.bIsAttacking = false;
+							Attack.AttackTimeRemaining = 0.0f;
+						}
+					}
+
 					// Attack range check (equivalent to your "if (DistanceToPlayer < 150.0f)")
 					if (DistanceToTarget < Attack.AttackRange)
 					{
@@ -69,7 +80,12 @@ void UEnemyAttackProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 							Attack.bIsInAttackRange = true;
 							Attack.TimeSinceLastAttack = 0.0f;
 
-							// Execute attack
+							// Trigger attack animation and damage
+							Attack.bIsAttacking = true;
+							Attack.bShouldTriggerAttackMontage = true;
+							Attack.CurrentAttackDuration = 1.0f; // Default duration, will be updated by visualization
+							Attack.AttackTimeRemaining = Attack.CurrentAttackDuration;
+
 							ExecuteAttack(EnemyLocation, Target.TargetLocation,
 								Attack.AttackDamage, Target.TargetActor.Get(), World);
 						}
@@ -77,10 +93,17 @@ void UEnemyAttackProcessor::Execute(FMassEntityManager& EntityManager, FMassExec
 						// Cooldown timer for subsequent attacks
 						Attack.TimeSinceLastAttack += DeltaTime;
 
-						// Attack every 1.5 seconds (equivalent to your attack interval)
-						if (Attack.TimeSinceLastAttack >= Attack.AttackInterval)
+						// Attack every AttackInterval seconds (equivalent to your attack interval)
+						if (Attack.TimeSinceLastAttack >= Attack.AttackInterval && !Attack.bIsAttacking)
 						{
 							Attack.TimeSinceLastAttack = 0.0f;
+
+							// Trigger attack animation and damage
+							Attack.bIsAttacking = true;
+							Attack.bShouldTriggerAttackMontage = true;
+							Attack.CurrentAttackDuration = 1.0f;
+							Attack.AttackTimeRemaining = Attack.CurrentAttackDuration;
+
 							ExecuteAttack(EnemyLocation, Target.TargetLocation,
 								Attack.AttackDamage, Target.TargetActor.Get(), World);
 						}

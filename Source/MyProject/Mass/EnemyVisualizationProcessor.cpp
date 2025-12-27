@@ -14,6 +14,7 @@
 #include "Async/TaskGraphInterfaces.h"
 #include "EngineUtils.h" // For TActorIterator
 #include "Engine/LocalPlayer.h" // For player index retrieval
+#include "Animation/AnimMontage.h" // For attack montage
 
 // ============================================================================
 // CONSTRUCTOR
@@ -71,6 +72,10 @@ UEnemyVisualizationProcessor::UEnemyVisualizationProcessor()
 		FSoftObjectPath(TEXT("/Script/Engine.MaterialInstanceConstant'/Game/Characters/Enemies/Skeleton/scene/ISM/Skeleton_Material_Inst_Idle.Skeleton_Material_Inst_Idle'")));
 	ISM_Material_1_Walk = TSoftObjectPtr<UMaterialInstance>(
 		FSoftObjectPath(TEXT("/Script/Engine.MaterialInstanceConstant'/Game/Characters/Enemies/Skeleton/scene/ISM/Skeleton_Material_Inst_Walk.Skeleton_Material_Inst_Walk'")));
+
+	// Attack montage
+	AttackMontage = TSoftObjectPtr<UAnimMontage>(
+		FSoftObjectPath(TEXT("/Script/Engine.AnimMontage'/Game/Characters/Enemies/Skeleton/scene/Animations/ZombieAttack_Montage.ZombieAttack_Montage'")));
 
 #if PLATFORM_ANDROID || PLATFORM_IOS
 	// Aggressive mobile optimizations for better performance
@@ -206,6 +211,13 @@ void UEnemyVisualizationProcessor::LoadAssets()
 		UE_LOG(LogTemp, Log, TEXT("EnemyVisualizationProcessor: ISM_Material_1_Walk loaded"));
 	}
 
+	// Load attack montage
+	if (!AttackMontage.IsNull())
+	{
+		AttackMontage.LoadSynchronous();
+		UE_LOG(LogTemp, Log, TEXT("EnemyVisualizationProcessor: AttackMontage loaded"));
+	}
+
 	UE_LOG(LogTemp, Error, TEXT("=== LOADED ASSETS CHECK ==="));
 	UE_LOG(LogTemp, Error, TEXT("SimpleDistantMesh: %s"),
 		SimpleDistantMesh.Get() ? *SimpleDistantMesh.Get()->GetName() : TEXT("NULL"));
@@ -310,11 +322,19 @@ void UEnemyVisualizationProcessor::InitializeSkeletalMeshPool(UWorld* World)
 		Actor->SetActorHiddenInGame(true);
 		Actor->SetActorEnableCollision(false);
 
+		// Create and attach damage component for animation-synced damage
+		UEnemyDamageComponent* DamageComp = NewObject<UEnemyDamageComponent>(Actor);
+		if (DamageComp)
+		{
+			DamageComp->RegisterComponent();
+		}
+
 		// Add to pool
 		FSkeletalMeshPoolEntry Entry;
 		Entry.Actor = Actor;
 		Entry.SkeletalMeshComponent = SkelMeshComp;
 		Entry.AnimInstance = Cast<UEnemyAnimInstance>(SkelMeshComp->GetAnimInstance());
+		Entry.DamageComponent = DamageComp;
 		Entry.bInUse = false;
 
 		int32 PoolIndex = SkeletalMeshPool.Add(Entry);
@@ -679,7 +699,7 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				// Update skeletal mesh if already assigned
 				if (VisFragment.RenderMode == EEnemyRenderMode::SkeletalMesh && VisFragment.SkeletalMeshPoolIndex >= 0)
 				{
-					UpdateSkeletalMesh(VisFragment.SkeletalMeshPoolIndex, Transform, Movement, Attack, State);
+					UpdateSkeletalMesh(VisFragment.SkeletalMeshPoolIndex, Transform, Movement, Attack, State, Target);
 					Attack.bHitPending = false;
 				}
 			}
@@ -1180,6 +1200,12 @@ void UEnemyVisualizationProcessor::ReleaseSkeletalMesh(int32 PoolIndex)
 		AnimInst->ResetToIdle();
 	}
 
+	// Clear any pending damage when releasing the mesh
+	if (UEnemyDamageComponent* DamageComp = Entry.DamageComponent.Get())
+	{
+		DamageComp->ClearPendingDamage();
+	}
+
 	Entry.AssignedEntity = FMassEntityHandle();
 	Entry.bInUse = false;
 
@@ -1190,8 +1216,9 @@ void UEnemyVisualizationProcessor::UpdateSkeletalMesh(
 	int32						  PoolIndex,
 	const FTransform&			  Transform,
 	const FEnemyMovementFragment& Movement,
-	const FEnemyAttackFragment&	  Attack,
-	const FEnemyStateFragment&	  State)
+	FEnemyAttackFragment&		  Attack,
+	const FEnemyStateFragment&	  State,
+	const FEnemyTargetFragment&	  Target)
 {
 	if (!SkeletalMeshPool.IsValidIndex(PoolIndex))
 	{
@@ -1258,6 +1285,34 @@ void UEnemyVisualizationProcessor::UpdateSkeletalMesh(
 		else if (Attack.bIsAttacking)
 		{
 			AnimInst->SetCombatState(EEnemyAnimationState::Attack, true, Attack.AttackType);
+
+			// Play attack montage if triggered
+			if (Attack.bShouldTriggerAttackMontage)
+			{
+				UAnimMontage* Montage = AttackMontage.Get();
+				if (Montage)
+				{
+					float MontageLength = AnimInst->Montage_Play(Montage, 1.0f);
+					if (MontageLength > 0.0f)
+					{
+						// Update attack duration based on actual montage length
+						Attack.CurrentAttackDuration = MontageLength;
+						Attack.AttackTimeRemaining = MontageLength;
+
+						// Set up pending damage for animation-synced hit
+						if (UEnemyDamageComponent* DamageComp = Entry.DamageComponent.Get())
+						{
+							DamageComp->SetPendingDamage(
+								Target.TargetActor.Get(),
+								Attack.AttackDamage,
+								Transform.GetLocation()
+							);
+						}
+					}
+				}
+				// Clear the trigger flag after attempting to play
+				Attack.bShouldTriggerAttackMontage = false;
+			}
 		}
 		else
 		{

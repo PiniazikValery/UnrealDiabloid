@@ -89,6 +89,13 @@ struct MYPROJECT_API FEnemyAttackFragment : public FMassFragment
 	
 	// Has a valid look-at target
 	bool bHasLookAtTarget = false;
+
+	// Flag to trigger attack montage playback (set by EnemyAttackProcessor, consumed by Visualization)
+	bool bShouldTriggerAttackMontage = false;
+
+	// Duration of current attack (for tracking attack end)
+	float CurrentAttackDuration = 0.0f;
+	float AttackTimeRemaining = 0.0f;
 };
 
 /**

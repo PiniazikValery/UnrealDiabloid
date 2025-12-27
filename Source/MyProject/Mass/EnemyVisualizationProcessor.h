@@ -11,6 +11,8 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "EnemyFragments.h"
 #include "Animation/EnemyAnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "../Components/EnemyDamageComponent.h"
 #include "EnemyVisualizationProcessor.generated.h"
 
 // ============================================================================
@@ -82,6 +84,9 @@ struct FSkeletalMeshPoolEntry
 
 	UPROPERTY()
 	TWeakObjectPtr<UEnemyAnimInstance> AnimInstance;
+
+	UPROPERTY()
+	TWeakObjectPtr<UEnemyDamageComponent> DamageComponent;
 
 	FMassEntityHandle AssignedEntity;
 	bool bInUse = false;
@@ -225,6 +230,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Distant LOD|Materials")
 	TSoftObjectPtr<UMaterialInstance> ISM_Material_1_Walk;
 
+	// Attack montage for enemies
+	UPROPERTY(EditAnywhere, Category = "Skeletal Mesh|Animation")
+	TSoftObjectPtr<UAnimMontage> AttackMontage;
+
 	// ========================================================================
 	// RUNTIME STATE
 	// ========================================================================
@@ -282,11 +291,12 @@ protected:
 	int32 AcquireSkeletalMesh(FMassEntityHandle Entity, const FTransform& Transform);
 	void ReleaseSkeletalMesh(int32 PoolIndex);
 	void UpdateSkeletalMesh(
-		int32 PoolIndex, 
+		int32 PoolIndex,
 		const FTransform& Transform,
 		const FEnemyMovementFragment& Movement,
-		const FEnemyAttackFragment& Attack,
-		const FEnemyStateFragment& State);
+		FEnemyAttackFragment& Attack,
+		const FEnemyStateFragment& State,
+		const FEnemyTargetFragment& Target);
 
 	// ========================================================================
 	// VAT/ISM MANAGEMENT

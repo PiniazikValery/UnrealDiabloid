@@ -420,7 +420,14 @@ void UMassEnemyReplicationSubsystem::UpdateClientEntity(FMassEntityHandle Entity
 
 	// Update Attack fragment
 	FEnemyAttackFragment& Attack = EntityManager.GetFragmentDataChecked<FEnemyAttackFragment>(EntityHandle);
+	const bool bWasAttacking = Attack.bIsAttacking;
 	Attack.bIsAttacking = State.IsAttacking();
+
+	// If attack just started (transition from not attacking to attacking), trigger montage on client
+	if (Attack.bIsAttacking && !bWasAttacking)
+	{
+		Attack.bShouldTriggerAttackMontage = true;
+	}
 
 	// Update Network ID and replicated data
 	Network.NetworkID = State.NetworkID;
