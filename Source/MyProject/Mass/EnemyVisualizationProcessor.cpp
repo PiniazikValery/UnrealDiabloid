@@ -13,6 +13,7 @@
 #include "Engine/StaticMesh.h"
 #include "Async/TaskGraphInterfaces.h"
 #include "EngineUtils.h" // For TActorIterator
+#include "Engine/LocalPlayer.h" // For player index retrieval
 
 // ============================================================================
 // CONSTRUCTOR
@@ -43,7 +44,9 @@ UEnemyVisualizationProcessor::UEnemyVisualizationProcessor()
 	WalkAnimationCycleDuration = 0.8f;
 	AnimationSyncTolerance = 0.15f;
 	MaxSyncWaitTime = 1.0f;
-	bSkipSkeletalMeshForIdleEnemies = true;
+	// Enemies now get skeletal mesh based on slot assignment, not movement state
+	// Even idle enemies get skeletal mesh if they're assigned to follow a nearby player
+	bSkipSkeletalMeshForIdleEnemies = false;
 
 	// Skeletal mesh - remove the "/Script/Engine.SkeletalMesh'" prefix
 	EnemySkeletalMesh = TSoftObjectPtr<USkeletalMesh>(
@@ -93,6 +96,8 @@ void UEnemyVisualizationProcessor::ConfigureQueries(const TSharedRef<FMassEntity
 	EntityQuery.AddRequirement<FEnemyMovementFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FEnemyAttackFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddRequirement<FEnemyStateFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FEnemyTargetFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FEnemyNetworkFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddTagRequirement<FEnemyTag>(EMassFragmentPresence::All);
 	EntityQuery.AddTagRequirement<FEnemyDeadTag>(EMassFragmentPresence::None);
 }
@@ -451,7 +456,61 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		return;
 	}
 
-	// Get player character location
+	const float CurrentTime = World->GetTimeSeconds();
+
+	// Periodically refresh the player list to handle players joining/leaving
+	if (CurrentTime - LastPlayerRefreshTime >= PlayerRefreshInterval || CachedPlayerPawns.Num() == 0)
+	{
+		LastPlayerRefreshTime = CurrentTime;
+		CachedPlayerPawns.Empty();
+		CachedPlayerLocations.Empty();
+
+		// Get all player controllers and cache their pawns
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			APlayerController* PC = It->Get();
+			if (PC && PC->GetPawn())
+			{
+				int32 PlayerIndex = 0;
+				// Try to get the player index from the local player
+				ULocalPlayer* LP = Cast<ULocalPlayer>(PC->Player);
+				if (LP)
+				{
+					PlayerIndex = LP->GetControllerId();
+				}
+				else
+				{
+					// For network players, use the order they appear
+					PlayerIndex = CachedPlayerPawns.Num();
+				}
+				CachedPlayerPawns.Add(PlayerIndex, PC->GetPawn());
+				CachedPlayerLocations.Add(PlayerIndex, PC->GetPawn()->GetActorLocation());
+			}
+		}
+	}
+	else
+	{
+		// Quick update of player locations
+		for (auto& Pair : CachedPlayerPawns)
+		{
+			if (Pair.Value.IsValid())
+			{
+				CachedPlayerLocations.FindOrAdd(Pair.Key) = Pair.Value->GetActorLocation();
+			}
+		}
+	}
+
+	// Validate cached players (some may have died or disconnected)
+	for (auto It = CachedPlayerPawns.CreateIterator(); It; ++It)
+	{
+		if (!It->Value.IsValid())
+		{
+			CachedPlayerLocations.Remove(It->Key);
+			It.RemoveCurrent();
+		}
+	}
+
+	// Get first player location for fallback/camera reference
 	CachedCameraLocation = FVector::ZeroVector;
 	if (APlayerController* PC = World->GetFirstPlayerController())
 	{
@@ -468,6 +527,18 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 	const float DeltaTime = World->GetDeltaSeconds() * UpdateFrequency;
 	const float MaxRenderDistanceSq = VATMaxDistance * VATMaxDistance;
 
+	// Check if we're on a client - on clients, we use replicated data for player assignment
+	const bool bIsClient = (World->GetNetMode() == NM_Client);
+
+	// NOTE: On client, we cannot reliably determine our server-assigned player index
+	// because the server uses a custom indexing scheme (host gets GetControllerId(),
+	// network players get sequential indices).
+	//
+	// Instead, we use a simpler approach: if an enemy has ANY slot assignment
+	// (Network.TargetPlayerIndex >= 0) and is close to the local player,
+	// show skeletal mesh. This works because enemies following a specific player
+	// will be near that player. If they're near us, they're likely following us.
+
 	// ========== PASS 1: Collect entities and update skeletal meshes ==========
 	CachedAllEntities.Reset();
 	if (CachedAllEntities.Max() < 1024)
@@ -478,12 +549,14 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 	int32 TotalAlive = 0;
 
 	EntityQuery.ForEachEntityChunk(Context,
-		[this, DeltaTime, MaxRenderDistanceSq, &TotalAlive](FMassExecutionContext& Context) {
+		[this, DeltaTime, MaxRenderDistanceSq, &TotalAlive, bIsClient](FMassExecutionContext& Context) {
 			const auto								 TransformList = Context.GetFragmentView<FTransformFragment>();
 			auto									 VisualizationList = Context.GetMutableFragmentView<FEnemyVisualizationFragment>();
 			const auto								 MovementList = Context.GetFragmentView<FEnemyMovementFragment>();
 			auto									 AttackList = Context.GetMutableFragmentView<FEnemyAttackFragment>();
 			const auto								 StateList = Context.GetFragmentView<FEnemyStateFragment>();
+			const auto								 TargetList = Context.GetFragmentView<FEnemyTargetFragment>();
+			const auto								 NetworkList = Context.GetFragmentView<FEnemyNetworkFragment>();
 			const TConstArrayView<FMassEntityHandle> Entities = Context.GetEntities();
 			const int32								 NumEntities = Context.GetNumEntities();
 
@@ -495,16 +568,76 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				}
 
 				TotalAlive++;
-				FEnemyVisualizationFragment&  VisFragment = VisualizationList[i];
-				const FTransform&			  Transform = TransformList[i].GetTransform();
-				const FEnemyMovementFragment& Movement = MovementList[i];
-				FEnemyAttackFragment&		  Attack = AttackList[i];
-				const FEnemyStateFragment&	  State = StateList[i];
+				FEnemyVisualizationFragment&	VisFragment = VisualizationList[i];
+				const FTransform&				Transform = TransformList[i].GetTransform();
+				const FEnemyMovementFragment&	Movement = MovementList[i];
+				FEnemyAttackFragment&			Attack = AttackList[i];
+				const FEnemyStateFragment&		State = StateList[i];
+				const FEnemyTargetFragment&		Target = TargetList[i];
+				const FEnemyNetworkFragment&	Network = NetworkList[i];
 
-				const FVector LocationDiff = Transform.GetLocation() - CachedCameraLocation;
+				const FVector EnemyLocation = Transform.GetLocation();
+
+				// Calculate distance to the player this enemy is assigned to follow
+				// Only enemies that have a slot assigned to a player should be candidates for skeletal mesh
+				float DistanceToAssignedPlayer = FLT_MAX;
+				bool bHasAssignedPlayer = false;
+
+				// On server: use Movement.AssignedSlotPlayerIndex (authoritative slot data)
+				// On client: if enemy has ANY slot assignment (TargetPlayerIndex >= 0),
+				//            check distance to local player. Enemies following a specific player
+				//            will be near that player, so if they're near us, they're following us.
+				int32 AssignedPlayerIndex = INDEX_NONE;
+				if (bIsClient)
+				{
+					// Client: if enemy has a slot assignment, use local player distance
+					// This simplification works because enemies assigned to other players
+					// will be near those players, not near us
+					if (Network.TargetPlayerIndex >= 0)
+					{
+						AssignedPlayerIndex = Network.TargetPlayerIndex;
+					}
+					// else: AssignedPlayerIndex stays INDEX_NONE, DistanceToAssignedPlayer stays FLT_MAX
+				}
+				else
+				{
+					// Server uses authoritative slot assignment
+					if (Movement.bHasAssignedSlot && Movement.AssignedSlotPlayerIndex != INDEX_NONE)
+					{
+						AssignedPlayerIndex = Movement.AssignedSlotPlayerIndex;
+					}
+					else if (Target.TargetPlayerIndex != INDEX_NONE)
+					{
+						AssignedPlayerIndex = Target.TargetPlayerIndex;
+					}
+				}
+
+				if (AssignedPlayerIndex != INDEX_NONE)
+				{
+					// For client, use local player location (CachedCameraLocation)
+					// For server, look up the assigned player's location
+					if (bIsClient)
+					{
+						DistanceToAssignedPlayer = FVector::Dist(EnemyLocation, CachedCameraLocation);
+						bHasAssignedPlayer = true;
+					}
+					else
+					{
+						const FVector* AssignedPlayerLocation = CachedPlayerLocations.Find(AssignedPlayerIndex);
+						if (AssignedPlayerLocation)
+						{
+							DistanceToAssignedPlayer = FVector::Dist(EnemyLocation, *AssignedPlayerLocation);
+							bHasAssignedPlayer = true;
+						}
+					}
+				}
+
+				// Fallback to camera distance for culling purposes
+				const FVector LocationDiff = EnemyLocation - CachedCameraLocation;
 				const float	  DistanceSq = LocationDiff.SizeSquared();
+				const float   DistanceToCamera = FMath::Sqrt(DistanceSq);
 
-				// Cull beyond max distance
+				// Cull beyond max distance (from any player's perspective)
 				if (DistanceSq > MaxRenderDistanceSq)
 				{
 					if (VisFragment.RenderMode != EEnemyRenderMode::Hidden)
@@ -525,8 +658,7 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 					continue;
 				}
 
-				const float Distance = FMath::Sqrt(DistanceSq);
-				VisFragment.CachedDistanceToCamera = Distance;
+				VisFragment.CachedDistanceToCamera = DistanceToCamera;
 				VisFragment.PoolLockTimer = FMath::Max(0.0f, VisFragment.PoolLockTimer - DeltaTime);
 				VisFragment.AnimationTime += DeltaTime * VisFragment.AnimationPlayRate;
 
@@ -534,12 +666,14 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				FSkeletalMeshCandidate Entry;
 				Entry.Entity = Entities[i];
 				Entry.EntityIndex = i;
-				Entry.Distance = Distance;
+				Entry.Distance = DistanceToCamera;
+				Entry.DistanceToAssignedPlayer = DistanceToAssignedPlayer;
 				Entry.VisFragment = &VisFragment;
 				Entry.Transform = &Transform;
-				Entry.Movement = &Movement; // Добавьте это поле в структуру!
+				Entry.Movement = &Movement;
 				Entry.Attack = &Attack;
 				Entry.State = &State;
+				Entry.Target = &Target;
 				CachedAllEntities.Add(Entry);
 
 				// Update skeletal mesh if already assigned
@@ -555,12 +689,15 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 	CachedAllEntities.Sort();
 
 	// ========== PASS 2: Assign render modes ==========
+	// Count how many enemies should have skeletal meshes based on distance to their ASSIGNED player
+	// This ensures enemies only get skeletal mesh when close to the player they're following
 	int32 NumShouldHaveSkeletal = 0;
 	for (const FSkeletalMeshCandidate& Entry : CachedAllEntities)
 	{
 		if (NumShouldHaveSkeletal >= SkeletalMeshPoolSize)
 			break;
-		if (Entry.Distance > SkeletalMeshMaxDistance)
+		// Use distance to assigned player - enemies not assigned to any player will have FLT_MAX distance
+		if (Entry.DistanceToAssignedPlayer > SkeletalMeshMaxDistance)
 			break;
 		NumShouldHaveSkeletal++;
 	}
@@ -591,61 +728,21 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 	}
 
 	// PHASE 2: Assign skeletal meshes to close entities (with animation sync for smooth transitions)
+	// NOTE: Enemies get skeletal mesh if they are close to their ASSIGNED player (have a slot with that player)
+	// Even idle enemies get skeletal mesh - the key is they must be assigned to follow that player
 	for (int32 i = 0; i < NumShouldHaveSkeletal; ++i)
 	{
 		FEnemyVisualizationFragment& Vis = *CachedAllEntities[i].VisFragment;
 		const FEnemyMovementFragment& Movement = *CachedAllEntities[i].Movement;
 
-		// Check if enemy is idle (not moving) with hysteresis - skip skeletal mesh for idle enemies
-		const float Speed = Movement.Velocity.Size();
-		bool bIsIdle;
-		if (Vis.RenderMode == EEnemyRenderMode::SkeletalMesh)
-		{
-			// Currently has skeletal mesh - need to drop below threshold minus hysteresis to become "idle"
-			bIsIdle = Speed < (ISMVelocityThreshold - ISMVelocityHysteresis);
-		}
-		else
-		{
-			// Currently ISM - need to exceed threshold plus hysteresis to NOT be considered "idle"
-			bIsIdle = Speed < (ISMVelocityThreshold + ISMVelocityHysteresis);
-		}
-
+		// Already has skeletal mesh - keep it (enemy is close to their assigned player)
 		if (Vis.RenderMode == EEnemyRenderMode::SkeletalMesh && Vis.SkeletalMeshPoolIndex >= 0)
 		{
-			// Already has skeletal mesh - check if we should release it because enemy is now idle
-			if (bSkipSkeletalMeshForIdleEnemies && bIsIdle)
-			{
-				// Enemy stopped moving - transition back to ISM to free up skeletal mesh slot
-				const FTransform& Transform = *CachedAllEntities[i].Transform;
-				int32 NewISMIndex = AcquireVATInstance(Transform, Vis, false);
-
-				ReleaseSkeletalMesh(Vis.SkeletalMeshPoolIndex);
-				Vis.SkeletalMeshPoolIndex = INDEX_NONE;
-				Vis.RenderMode = EEnemyRenderMode::ISM_VAT;
-				Vis.ISMInstanceIndex = NewISMIndex;
-				Vis.bISMIsWalking = false;
-				Vis.bPendingSkeletalMeshTransition = false;
-				continue;
-			}
-
-			// Still moving, keep skeletal mesh
 			Vis.bPendingSkeletalMeshTransition = false;
 			continue;
 		}
 
-		// Skip skeletal mesh for idle enemies - ISM+VAT handles idle well
-		if (bSkipSkeletalMeshForIdleEnemies && bIsIdle)
-		{
-			// FIX: If enemy stopped moving but is still in walking ISM, switch to idle ISM
-			if (Vis.RenderMode == EEnemyRenderMode::ISM_VAT && Vis.bISMIsWalking && Vis.ISMInstanceIndex >= 0)
-			{
-				SwitchISMAnimationState(Vis, *CachedAllEntities[i].Transform, false);
-			}
-			Vis.bPendingSkeletalMeshTransition = false;
-			continue;
-		}
-
-		// Entity is in ISM mode and should transition to skeletal mesh (only for moving enemies)
+		// Entity is in ISM mode and should transition to skeletal mesh
 		if (Vis.RenderMode == EEnemyRenderMode::ISM_VAT && Vis.ISMInstanceIndex >= 0)
 		{
 			// Mark as pending transition if not already

@@ -318,28 +318,126 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 						}
 						else
 						{
-							// No slot available - move toward player but stay at attack range
-							Movement.AssignedSlotWorldPosition = PlayerLocation;
+							// No slot available - calculate a waiting position at the outer edge
+							// instead of targeting player directly (which causes oscillation in crowds)
+
+							// Calculate direction from player to this enemy
+							FVector ToEnemy = CurrentLocation - PlayerLocation;
+							ToEnemy.Z = 0.0f;
+							const float CurrentDistanceToPlayer = ToEnemy.Size();
+
+							if (CurrentDistanceToPlayer > KINDA_SMALL_NUMBER)
+							{
+								ToEnemy.Normalize();
+
+								// Outer waiting distance - position enemies beyond the outermost slot ring
+								// This keeps them out of the way of enemies with slots
+								const float OuterWaitingDistance = 450.0f; // Beyond typical slot rings
+								const float InnerWaitingDistance = 350.0f; // Minimum waiting distance
+
+								if (CurrentDistanceToPlayer >= InnerWaitingDistance)
+								{
+									// Already at or beyond waiting distance - stay here and wait
+									Movement.AssignedSlotWorldPosition = CurrentLocation;
+									Movement.bAtSlotPosition = true; // Mark as arrived so we stop moving
+								}
+								else
+								{
+									// Move outward to the waiting zone
+									Movement.AssignedSlotWorldPosition = PlayerLocation + ToEnemy * OuterWaitingDistance;
+									Movement.bAtSlotPosition = false;
+								}
+							}
+							else
+							{
+								// Very close to player with no direction - pick a random direction outward
+								float RandomAngle = FMath::FRand() * 360.0f;
+								FVector RandomDir = FVector::ForwardVector.RotateAngleAxis(RandomAngle, FVector::UpVector);
+								Movement.AssignedSlotWorldPosition = PlayerLocation + RandomDir * 450.0f;
+								Movement.bAtSlotPosition = false;
+							}
+
 							Movement.bHasAssignedSlot = false;
-							Movement.bAtSlotPosition = false;
 							Movement.SlotReassignmentCooldown = 0.5f; // Try again soon
 						}
 					}
 					else
 					{
-						// Update slot world position (it moves with player)
-						Movement.AssignedSlotWorldPosition = SlotManager->GetSlotWorldPosition(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
-
-						// Check if our current slot is still on navmesh (player may have moved near a building)
-						if (!SlotManager->IsSlotOnNavMesh(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex))
+						if (Movement.bHasAssignedSlot)
 						{
-							// Slot is now off navmesh - release it and request a new one
-							SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
-							Movement.bHasAssignedSlot = false;
-							Movement.bAtSlotPosition = false;
-							Movement.AssignedSlotPlayerIndex = INDEX_NONE;
-							Movement.SlotReassignmentCooldown = 0.0f; // Request new slot immediately
-							continue; // Skip to next entity, will get new slot next frame
+							// Update slot world position (it moves with player)
+							Movement.AssignedSlotWorldPosition = SlotManager->GetSlotWorldPosition(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
+
+							// Check if our current slot is still on navmesh (player may have moved near a building)
+							if (!SlotManager->IsSlotOnNavMesh(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex))
+							{
+								// Slot is now off navmesh - release it and request a new one
+								SlotManager->ReleaseSlotByIndex(Movement.AssignedSlotPlayerIndex, Movement.AssignedSlotIndex);
+								Movement.bHasAssignedSlot = false;
+								Movement.bAtSlotPosition = false;
+								Movement.AssignedSlotPlayerIndex = INDEX_NONE;
+								Movement.SlotReassignmentCooldown = 0.0f; // Request new slot immediately
+								continue; // Skip to next entity, will get new slot next frame
+							}
+						}
+						else
+						{
+							// Slotless enemy - update waiting position to follow the player
+							// Calculate direction from player to this enemy
+							FVector ToEnemy = CurrentLocation - PlayerLocation;
+							ToEnemy.Z = 0.0f;
+							const float CurrentDistToPlayer = ToEnemy.Size();
+
+							const float OuterWaitingDistance = 450.0f;
+							const float InnerWaitingDistance = 350.0f;
+							const float WaitingDriftThreshold = 100.0f; // How far they can drift before resuming movement
+
+							if (CurrentDistToPlayer > KINDA_SMALL_NUMBER)
+							{
+								ToEnemy.Normalize();
+
+								// Calculate ideal waiting position
+								FVector IdealWaitingPos = PlayerLocation + ToEnemy * OuterWaitingDistance;
+
+								if (Movement.bAtSlotPosition)
+								{
+									// Currently waiting - check if we've drifted too far from ideal
+									const float DriftDistance = FVector::Dist2D(CurrentLocation, IdealWaitingPos);
+
+									if (DriftDistance > WaitingDriftThreshold)
+									{
+										// Drifted too far - need to move to new waiting position
+										Movement.AssignedSlotWorldPosition = IdealWaitingPos;
+										Movement.bAtSlotPosition = false;
+									}
+									else if (CurrentDistToPlayer < InnerWaitingDistance - 50.0f)
+									{
+										// Too close to player (maybe pushed by crowd) - move outward
+										Movement.AssignedSlotWorldPosition = IdealWaitingPos;
+										Movement.bAtSlotPosition = false;
+									}
+									else
+									{
+										// Stay where we are
+										Movement.AssignedSlotWorldPosition = CurrentLocation;
+									}
+								}
+								else
+								{
+									// Not at position yet - update target
+									if (CurrentDistToPlayer >= InnerWaitingDistance)
+									{
+										// Close enough to waiting zone - stop here
+										Movement.AssignedSlotWorldPosition = CurrentLocation;
+										Movement.bAtSlotPosition = true;
+									}
+									else
+									{
+										// Still need to move outward
+										Movement.AssignedSlotWorldPosition = IdealWaitingPos;
+									}
+								}
+							}
 						}
 					}
 
@@ -714,6 +812,11 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 					const float MinDistance = 85.0f;
 					const float DetectionRadius = 160.0f;
 
+					// Slotless enemies in the waiting zone should have reduced avoidance
+					// They should stay put and not push into the crowd
+					const bool bIsSlotlessWaiting = !Movement.bHasAssignedSlot && Movement.bAtSlotPosition;
+					const float AvoidanceMultiplier = bIsSlotlessWaiting ? 0.3f : 1.0f;
+
 					for (int32 j = 0; j < NumEntities; ++j)
 					{
 						if (i == j)
@@ -737,7 +840,7 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 								FMath::Cos(FMath::DegreesToRadians(DeterministicAngle)),
 								FMath::Sin(FMath::DegreesToRadians(DeterministicAngle)),
 								0.0f);
-							SeparationOffset += EscapeDir * 2.0f;
+							SeparationOffset += EscapeDir * 2.0f * AvoidanceMultiplier;
 							NearbyCount++;
 							continue;
 						}
@@ -748,7 +851,7 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 						if (Distance < MinDistance)
 						{
 							float PenetrationDepth = MinDistance - Distance;
-							float OffsetStrength = PenetrationDepth * 0.2f * MyPriority;
+							float OffsetStrength = PenetrationDepth * 0.2f * MyPriority * AvoidanceMultiplier;
 							OffsetStrength = FMath::Min(OffsetStrength, 4.0f);
 							SeparationOffset += DirectionAway * OffsetStrength;
 							NearbyCount++;
@@ -756,7 +859,7 @@ void UEnemyMovementProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 						else if (Distance < DetectionRadius)
 						{
 							float NormalizedDist = (Distance - MinDistance) / (DetectionRadius - MinDistance);
-							float OffsetStrength = (1.0f - NormalizedDist) * 0.5f * MyPriority;
+							float OffsetStrength = (1.0f - NormalizedDist) * 0.5f * MyPriority * AvoidanceMultiplier;
 							SeparationOffset += DirectionAway * OffsetStrength;
 							NearbyCount++;
 						}

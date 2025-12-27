@@ -102,15 +102,17 @@ struct FSkeletalMeshCandidate
 	int32 EntityIndex;
 	int32 ChunkIndex;
 	float Distance;
+	float DistanceToAssignedPlayer;  // Distance to the player this enemy is assigned to follow
 	FEnemyVisualizationFragment* VisFragment;
 	const FTransform* Transform;
 	const FEnemyMovementFragment* Movement = nullptr;
-    const FEnemyAttackFragment* Attack = nullptr;
-    const FEnemyStateFragment* State = nullptr;
-	
+	const FEnemyAttackFragment* Attack = nullptr;
+	const FEnemyStateFragment* State = nullptr;
+	const FEnemyTargetFragment* Target = nullptr;
+
 	bool operator<(const FSkeletalMeshCandidate& Other) const
 	{
-		return Distance < Other.Distance; // Closer = higher priority
+		return DistanceToAssignedPlayer < Other.DistanceToAssignedPlayer; // Closer to assigned player = higher priority
 	}
 };
 
@@ -201,9 +203,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
 	float MaxSyncWaitTime = 1.0f;  // Maximum time to wait for sync before forcing transition
 
-	// Skip skeletal mesh for idle enemies (ISM+VAT handles idle well)
+	// Skip skeletal mesh for idle enemies (legacy - now enemies get skeletal mesh based on slot assignment)
+	// Set to false: even idle enemies get skeletal mesh if close to their assigned player
 	UPROPERTY(EditAnywhere, Category = "Visualization|Animation Sync")
-	bool bSkipSkeletalMeshForIdleEnemies = true;
+	bool bSkipSkeletalMeshForIdleEnemies = false;
 
 	UPROPERTY(EditAnywhere, Category = "Distant LOD")
 	TSoftObjectPtr<UStaticMesh> SimpleDistantMesh;
@@ -256,6 +259,12 @@ protected:
 	int32 FrameCounter = 0;
 	int32 SortCounter = 0;
 	FVector CachedCameraLocation = FVector::ZeroVector;
+
+	// Cache all player pawn locations for multiplayer support
+	TMap<int32, TWeakObjectPtr<APawn>> CachedPlayerPawns;
+	TMap<int32, FVector> CachedPlayerLocations;
+	float LastPlayerRefreshTime = 0.0f;
+	float PlayerRefreshInterval = 0.5f;
 
 	// Lazy initialization flag
 	bool bIsInitialized = false;

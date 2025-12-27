@@ -269,8 +269,8 @@ void UEnemyNetworkReplicationProcessor::UpdateNetworkFragment(
 	// Store velocity for client-side prediction
 	Network.ReplicatedVelocity = Movement.Velocity;
 
-	// Target player index (set elsewhere if needed)
-	Network.TargetPlayerIndex = -1;
+	// Target player index - use the slot assignment for proper client-side visualization
+	Network.TargetPlayerIndex = Movement.bHasAssignedSlot ? Movement.AssignedSlotPlayerIndex : -1;
 }
 
 FCompressedEnemyState UEnemyNetworkReplicationProcessor::CompressEntityState(
