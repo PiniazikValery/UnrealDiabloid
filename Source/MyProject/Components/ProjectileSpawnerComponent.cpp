@@ -43,6 +43,11 @@ void UProjectileSpawnerComponent::UpdateFromRotationOffset(float OffsetDegrees)
 
 void UProjectileSpawnerComponent::SpawnProjectile(TSubclassOf<AMageProjectile> ProjectileClass, AActor* OwnerActor)
 {
+    SpawnProjectileWithTarget(ProjectileClass, OwnerActor, INDEX_NONE);
+}
+
+void UProjectileSpawnerComponent::SpawnProjectileWithTarget(TSubclassOf<AMageProjectile> ProjectileClass, AActor* OwnerActor, int32 TargetMassEntityNetworkID)
+{
     if (!ProjectileClass || !OwnerActor || !SpawnPoint) return;
     UWorld* World = OwnerActor->GetWorld();
     if (!World) return;
@@ -50,9 +55,15 @@ void UProjectileSpawnerComponent::SpawnProjectile(TSubclassOf<AMageProjectile> P
     const FRotator Rotation = SpawnPoint->GetComponentRotation();
     FActorSpawnParameters Params; Params.Owner = OwnerActor; Params.Instigator = Cast<APawn>(OwnerActor);
     AMageProjectile* Projectile = World->SpawnActor<AMageProjectile>(ProjectileClass, Location, Rotation, Params);
-    if (Projectile && Projectile->ProjectileMovement)
+    if (Projectile)
     {
-        const FVector Dir = Rotation.Vector();
-        Projectile->ProjectileMovement->Velocity = Dir * Projectile->ProjectileMovement->InitialSpeed;
+        // Set target Mass Entity if provided
+        Projectile->TargetMassEntityNetworkID = TargetMassEntityNetworkID;
+
+        if (Projectile->ProjectileMovement)
+        {
+            const FVector Dir = Rotation.Vector();
+            Projectile->ProjectileMovement->Velocity = Dir * Projectile->ProjectileMovement->InitialSpeed;
+        }
     }
 }

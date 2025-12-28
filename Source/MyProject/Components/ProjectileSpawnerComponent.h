@@ -20,6 +20,10 @@ public:
     UFUNCTION(BlueprintCallable, Category="Projectile")
     void SpawnProjectile(TSubclassOf<AMageProjectile> ProjectileClass, AActor* OwnerActor);
 
+    // Spawn projectile with a specific Mass Entity target
+    UFUNCTION(BlueprintCallable, Category="Projectile")
+    void SpawnProjectileWithTarget(TSubclassOf<AMageProjectile> ProjectileClass, AActor* OwnerActor, int32 TargetMassEntityNetworkID);
+
     UFUNCTION(BlueprintCallable, Category="Projectile")
     UArrowComponent* GetSpawnPoint() const { return SpawnPoint; }
 

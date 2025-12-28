@@ -182,6 +182,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Debug")
 	bool bDrawDebugInfo = false;
 
+	// Enable detailed logging for debugging disappearing enemies
+	UPROPERTY(EditAnywhere, Category = "Debug")
+	bool bEnableDisappearanceLogging = true;
+
 	UPROPERTY(EditAnywhere, Category = "Visualization")
 	float PoolLockDuration = 0.5f;
 
@@ -351,6 +355,17 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Debug")
 	void GetVisualizationStats(int32& OutSkeletalMeshCount, int32& OutVATInstanceCount) const;
+
+	// Clean up visualization resources for an entity about to be destroyed
+	// Call this BEFORE destroying the entity to properly release ISM instances and skeletal meshes
+	void CleanupEntityVisualization(const FMassEntityHandle& EntityHandle, FMassEntityManager& EntityManager);
+
+	// Get instance for a specific world (handles multiple PIE worlds correctly)
+	static UEnemyVisualizationProcessor* GetInstanceForWorld(UWorld* World);
+
+private:
+	// Map of world to processor instance (handles multiple PIE worlds)
+	static TMap<TWeakObjectPtr<UWorld>, UEnemyVisualizationProcessor*> WorldInstances;
 };
 
 // ============================================================================

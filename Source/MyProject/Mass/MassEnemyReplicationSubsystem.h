@@ -100,6 +100,20 @@ public:
 	void QueueBatchForSending(APlayerController* Client, const FMassEntityBatchUpdate& Batch);
 
 	/**
+	 * Queue a death notification to be sent to all clients (server-side)
+	 * Call this BEFORE destroying the entity
+	 * @param NetworkID The NetworkID of the entity that died
+	 */
+	void QueueDeathNotification(int32 NetworkID);
+
+	/**
+	 * Handle death notification received from server (client-side)
+	 * Destroys the client entity and cleans up visualization
+	 * @param NetworkIDs Array of NetworkIDs that have died
+	 */
+	void HandleDeathNotifications(const TArray<int32>& NetworkIDs);
+
+	/**
 	 * Get NetworkID to Entity mapping (client-side)
 	 */
 	TMap<int32, FMassEntityHandle>& GetNetworkIDToEntityMap() { return NetworkIDToEntity; }
@@ -145,7 +159,16 @@ protected:
 	TMap<APlayerController*, TArray<FMassEntityBatchUpdate>> QueuedBatchesToSend;
 	FCriticalSection QueuedBatchesLock;  // Thread safety for worker thread access
 
+	// Queued death notifications to send to all clients (server-side only)
+	TArray<int32> QueuedDeathNotifications;
+	FCriticalSection DeathNotificationsLock;  // Thread safety
+
 	// Client-side entity tracking
 	TMap<int32, FMassEntityHandle> NetworkIDToEntity;  // NetworkID -> Client EntityHandle mapping
 	FMassArchetypeHandle ClientEntityArchetype;  // Cached archetype for client entities
+
+	// Debug: Track last update time per entity to detect stale entities
+	TMap<int32, float> NetworkIDLastUpdateTime;
+	float DebugLogTimer = 0.0f;
+	float DebugLogInterval = 1.0f;  // Log summary every second
 };

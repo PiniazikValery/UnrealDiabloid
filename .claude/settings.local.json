@@ -13,7 +13,8 @@
       "Bash(findstr:*)",
       "Bash(more:*)",
       "Bash(dir:*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(\"C:\\\\Program Files\\\\Epic Games\\\\UE_5.6\\\\Engine\\\\Build\\\\BatchFiles\\\\Build.bat\" MyProjectEditor Win64 Development -Project=\"C:\\\\Users\\\\Valery\\\\Documents\\\\Unreal Projects\\\\MyProject\\\\MyProject.uproject\" -WaitMutex)"
     ],
     "deny": [],
     "ask": []

@@ -32,6 +32,30 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientNotifyEnemySpawn(int32 NetworkID, FVector Location);
 
+	/**
+	 * Client RPC for death notifications
+	 * Ensures clients destroy entities when server kills them
+	 * Reliable to guarantee clients receive the death notification
+	 */
+	UFUNCTION(Client, Reliable)
+	void ClientReceiveDeathNotifications(const TArray<int32>& NetworkIDs);
+
+	/**
+	 * Server RPC to apply damage to a Mass entity
+	 * Called by clients when their projectiles hit enemies
+	 * Server applies the damage authoritatively
+	 */
+	UFUNCTION(Server, Reliable)
+	void ServerApplyDamageToMassEntity(int32 TargetNetworkID, float Damage);
+
+	/**
+	 * Server RPC to apply area damage at a location
+	 * Called by clients when their projectiles hit a location
+	 * Server applies the damage authoritatively
+	 */
+	UFUNCTION(Server, Reliable)
+	void ServerApplyDamageAtLocation(FVector HitLocation, float DamageRadius, float Damage);
+
 protected:
 	virtual void BeginPlay() override;
 };

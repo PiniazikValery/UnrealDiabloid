@@ -360,7 +360,7 @@ void AMyProjectCharacter::FireProjectile()
 {
 	if (ProjectileSpawnerComponent && ProjectileClass)
 	{
-		ProjectileSpawnerComponent->SpawnProjectile(ProjectileClass, this);
+		ProjectileSpawnerComponent->SpawnProjectileWithTarget(ProjectileClass, this, CurrentTargetMassEntityNetworkID);
 	}
 }
 
@@ -691,32 +691,56 @@ void AMyProjectCharacter::HandleGesture(EGestureType Gesture)
 	else if (Gesture == EGestureType::None)
 	{
 		float Angle = 0.f;
-		
+
 		// Use AutoAimHelper to find target
+		UE_LOG(LogTemp, Warning, TEXT("[AutoAim Character] HandleGesture - bEnableAutoAim: %s, AutoAimRange: %.1f, AutoAimMaxAngle: %.1f"),
+			bEnableAutoAim ? TEXT("true") : TEXT("false"), AutoAimRange, AutoAimMaxAngle);
+
 		if (bEnableAutoAim)
-		{	
-			FAutoAimResult AimResult = UAutoAimHelper::FindBestTargetAndAngle(
+		{
+			// Reset current target
+			CurrentTargetMassEntityNetworkID = INDEX_NONE;
+
+			// First, try to find Mass Entity enemies (these are the main enemy type)
+			FMassAutoAimResult MassAimResult = UAutoAimHelper::FindBestMassEntityTarget(
 				this,
-				AEnemyCharacter::StaticClass(),
 				AutoAimRange,
 				AutoAimMaxAngle,
-				AutoAimMode
+				AutoAimMode,
+				true // Check visibility
 			);
-			
-			if (AimResult.bTargetFound)
+
+			if (MassAimResult.bTargetFound)
 			{
-				Angle = AimResult.AimAngle;
-				
-				// Calculate relative position for verification
-				FVector RelativePos = AimResult.Target->GetActorLocation() - GetActorLocation();
+				Angle = MassAimResult.AimAngle;
+				CurrentTargetMassEntityNetworkID = MassAimResult.TargetNetworkID;
+				UE_LOG(LogTemp, Warning, TEXT("[AutoAim Character] Using MASS target - Angle: %.1f, NetworkID: %d"), Angle, CurrentTargetMassEntityNetworkID);
 			}
 			else
 			{
-				// Fallback to random angle
-				std::random_device rd;
-				std::mt19937 gen(rd());
-				std::uniform_real_distribution<float> dis(-AutoAimMaxAngle, AutoAimMaxAngle);
-				Angle = dis(gen);
+				// Fallback: try regular actor-based enemies (AEnemyCharacter)
+				FAutoAimResult AimResult = UAutoAimHelper::FindBestTargetAndAngle(
+					this,
+					AEnemyCharacter::StaticClass(),
+					AutoAimRange,
+					AutoAimMaxAngle,
+					AutoAimMode
+				);
+
+				if (AimResult.bTargetFound)
+				{
+					Angle = AimResult.AimAngle;
+					UE_LOG(LogTemp, Warning, TEXT("[AutoAim Character] Using ACTOR target - Angle: %.1f"), Angle);
+				}
+				else
+				{
+					// No targets found - fallback to random angle
+					std::random_device rd;
+					std::mt19937 gen(rd());
+					std::uniform_real_distribution<float> dis(-AutoAimMaxAngle, AutoAimMaxAngle);
+					Angle = dis(gen);
+					UE_LOG(LogTemp, Warning, TEXT("[AutoAim Character] No targets found - using RANDOM angle: %.1f"), Angle);
+				}
 			}
 		}
 		else

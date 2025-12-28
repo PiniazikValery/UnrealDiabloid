@@ -8,6 +8,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
+#include "../AutoAimHelper.h"
 #include "MageProjectile.generated.h"
 
 UCLASS()
@@ -37,11 +38,33 @@ public:
 
 	// Damage dealt by the projectile
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
-	float ProjectileDamage = 15.0f;
+	float ProjectileDamage = 50.0f;
+
+	// Radius for detecting Mass Entity enemies (since they don't have collision)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Combat")
+	float MassEntityDamageRadius = 100.0f;
+
+	// Target Mass Entity NetworkID (set by auto-aim system)
+	UPROPERTY(BlueprintReadWrite, Category = "Combat")
+	int32 TargetMassEntityNetworkID = INDEX_NONE;
 
 private:
 	UFUNCTION()
 	void OnHit(UPrimitiveComponent* HitComp, AActor* OtherActor, UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
+
+	// Check if projectile is close enough to hit Mass entities (they have no physics collision)
+	void CheckMassEntityProximityHit();
+
+	// Route damage through server RPC on clients, or apply directly on server
+	bool ApplyMassEntityDamage(int32 NetworkID, float Damage);
+	int32 ApplyAreaDamage(FVector Location, float Radius, float Damage);
+
 	float InitialHoverHeight = 0.0f;
 	float HoverAdjustTolerance = 10.0f;
+
+	// Hit radius for Mass entity proximity detection
+	float MassEntityHitRadius = 80.0f;
+
+	// Prevent double-hit
+	bool bHasHitMassEntity = false;
 };

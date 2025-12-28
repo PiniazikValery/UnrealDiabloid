@@ -2,6 +2,7 @@
 
 #include "MyProjectPlayerController.h"
 #include "Mass/MassEnemyReplicationSubsystem.h"
+#include "AutoAimHelper.h"
 
 void AMyProjectPlayerController::BeginPlay()
 {
@@ -43,4 +44,43 @@ void AMyProjectPlayerController::ClientNotifyEnemySpawn_Implementation(int32 Net
 
 	// The reception processor will create the local entity
 	// This will be implemented in the reception processor
+}
+
+void AMyProjectPlayerController::ClientReceiveDeathNotifications_Implementation(const TArray<int32>& NetworkIDs)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Client RPC: Received %d death notifications"), NetworkIDs.Num());
+
+	if (UWorld* World = GetWorld())
+	{
+		if (UMassEnemyReplicationSubsystem* RepSubsystem = World->GetSubsystem<UMassEnemyReplicationSubsystem>())
+		{
+			RepSubsystem->HandleDeathNotifications(NetworkIDs);
+		}
+		else
+		{
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Client RPC: No ReplicationSubsystem for death notifications!"));
+		}
+	}
+}
+
+void AMyProjectPlayerController::ServerApplyDamageToMassEntity_Implementation(int32 TargetNetworkID, float Damage)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[MASS-DAMAGE] Server RPC: Applying %.1f damage to NetworkID %d"), Damage, TargetNetworkID);
+
+	// Apply damage on the server (authoritative)
+	bool bSuccess = UAutoAimHelper::ApplyDamageToMassEntity(this, TargetNetworkID, Damage);
+
+	UE_LOG(LogTemp, Warning, TEXT("[MASS-DAMAGE] Server RPC: Damage application %s for NetworkID %d"),
+		bSuccess ? TEXT("SUCCESS") : TEXT("FAILED"), TargetNetworkID);
+}
+
+void AMyProjectPlayerController::ServerApplyDamageAtLocation_Implementation(FVector HitLocation, float DamageRadius, float Damage)
+{
+	UE_LOG(LogTemp, Warning, TEXT("[MASS-DAMAGE] Server RPC: Applying %.1f area damage at %s (radius %.1f)"),
+		Damage, *HitLocation.ToString(), DamageRadius);
+
+	// Apply area damage on the server (authoritative)
+	int32 DamagedCount = UAutoAimHelper::ApplyDamageAtLocation(this, HitLocation, DamageRadius, Damage);
+
+	UE_LOG(LogTemp, Warning, TEXT("[MASS-DAMAGE] Server RPC: Area damage hit %d enemies"), DamagedCount);
 }

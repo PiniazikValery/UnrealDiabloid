@@ -234,6 +234,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Combat|Auto-Aim")
 	ETargetSelectionMode AutoAimMode = ETargetSelectionMode::ClosestToCenter;
 
+	// Current target Mass Entity NetworkID (set by auto-aim, used by projectiles)
+	UPROPERTY(BlueprintReadOnly, Category = "Combat|Auto-Aim")
+	int32 CurrentTargetMassEntityNetworkID = INDEX_NONE;
+
 	// Stats death handler - protected so derived classes can override
 	UFUNCTION()
 	virtual void HandleDeath();

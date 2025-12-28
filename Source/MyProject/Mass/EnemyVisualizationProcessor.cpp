@@ -2,6 +2,9 @@
 // Hybrid visualization: Skeletal Mesh + ISM/VAT
 
 #include "EnemyVisualizationProcessor.h"
+
+// Static map of world to processor instance (handles multiple PIE worlds)
+TMap<TWeakObjectPtr<UWorld>, UEnemyVisualizationProcessor*> UEnemyVisualizationProcessor::WorldInstances;
 #include "MassEntitySubsystem.h"
 #include "MassExecutionContext.h"
 #include "MassCommonFragments.h"
@@ -116,6 +119,26 @@ void UEnemyVisualizationProcessor::InitializeInternal(UObject& Owner, const TSha
 	Super::InitializeInternal(Owner, EntityManager);
 
 	UWorld* World = Owner.GetWorld();
+
+	// Register this processor for its world (handles multiple PIE worlds)
+	if (World)
+	{
+		// Check if there's already a processor for this world
+		UEnemyVisualizationProcessor** ExistingProcessor = WorldInstances.Find(World);
+		if (ExistingProcessor && *ExistingProcessor && *ExistingProcessor != this)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] Replacing existing processor %p with %p for world %s - will reset entity visualization"),
+				*ExistingProcessor, this, *World->GetName());
+			// Mark that we need to reset entity visualization indices
+			// (they may point to the old processor's resources)
+		}
+
+		WorldInstances.Add(World, this);
+		UE_LOG(LogTemp, Log, TEXT("[VIS-DEBUG] EnemyVisualizationProcessor REGISTERED for world %s (Total worlds: %d)"),
+			*World->GetName(), WorldInstances.Num());
+		UE_LOG(LogTemp, Log, TEXT("[VIS-DEBUG] Processor ptr: %p, World NetMode: %d"),
+			this, (int32)World->GetNetMode());
+	}
 	if (!World)
 	{
 		UE_LOG(LogTemp, Error, TEXT("EnemyVisualizationProcessor: No valid world"));
@@ -567,9 +590,12 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 	}
 
 	int32 TotalAlive = 0;
+	int32 DebugHiddenCount = 0;
+	int32 DebugCulledByDistance = 0;
+	int32 DebugNoAssignedPlayer = 0;
 
 	EntityQuery.ForEachEntityChunk(Context,
-		[this, DeltaTime, MaxRenderDistanceSq, &TotalAlive, bIsClient](FMassExecutionContext& Context) {
+		[this, DeltaTime, MaxRenderDistanceSq, &TotalAlive, &DebugHiddenCount, &DebugCulledByDistance, &DebugNoAssignedPlayer, bIsClient](FMassExecutionContext& Context) {
 			const auto								 TransformList = Context.GetFragmentView<FTransformFragment>();
 			auto									 VisualizationList = Context.GetMutableFragmentView<FEnemyVisualizationFragment>();
 			const auto								 MovementList = Context.GetFragmentView<FEnemyMovementFragment>();
@@ -596,6 +622,29 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				const FEnemyTargetFragment&		Target = TargetList[i];
 				const FEnemyNetworkFragment&	Network = NetworkList[i];
 
+				// Validate visualization indices - reset if stale (pointing to invalid resources)
+				// This can happen when a new processor replaces an old one
+				if (VisFragment.SkeletalMeshPoolIndex >= 0 &&
+					(VisFragment.SkeletalMeshPoolIndex >= SkeletalMeshPool.Num() ||
+					 !SkeletalMeshPool[VisFragment.SkeletalMeshPoolIndex].bInUse ||
+					 SkeletalMeshPool[VisFragment.SkeletalMeshPoolIndex].AssignedEntity != Entities[i]))
+				{
+					// Stale skeletal mesh index - reset it
+					VisFragment.SkeletalMeshPoolIndex = INDEX_NONE;
+					VisFragment.RenderMode = EEnemyRenderMode::None;
+				}
+				if (VisFragment.ISMInstanceIndex >= 0)
+				{
+					// Validate ISM index by checking against current ISM instance count
+					UInstancedStaticMeshComponent* TargetISM = VisFragment.bISMIsWalking ? VATISM_Walk : VATISM;
+					if (!TargetISM || VisFragment.ISMInstanceIndex >= TargetISM->GetInstanceCount())
+					{
+						// Stale ISM index - reset it
+						VisFragment.ISMInstanceIndex = INDEX_NONE;
+						VisFragment.RenderMode = EEnemyRenderMode::None;
+					}
+				}
+
 				const FVector EnemyLocation = Transform.GetLocation();
 
 				// Calculate distance to the player this enemy is assigned to follow
@@ -604,20 +653,17 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				bool bHasAssignedPlayer = false;
 
 				// On server: use Movement.AssignedSlotPlayerIndex (authoritative slot data)
-				// On client: if enemy has ANY slot assignment (TargetPlayerIndex >= 0),
-				//            check distance to local player. Enemies following a specific player
-				//            will be near that player, so if they're near us, they're following us.
+				// On client: ALWAYS use distance to local player for skeletal mesh decisions.
+				//            Even enemies without slot assignments should get skeletal mesh if close.
+				//            The server handles the slot-based prioritization; the client just needs
+				//            to display enemies that are near the local player.
 				int32 AssignedPlayerIndex = INDEX_NONE;
 				if (bIsClient)
 				{
-					// Client: if enemy has a slot assignment, use local player distance
-					// This simplification works because enemies assigned to other players
-					// will be near those players, not near us
-					if (Network.TargetPlayerIndex >= 0)
-					{
-						AssignedPlayerIndex = Network.TargetPlayerIndex;
-					}
-					// else: AssignedPlayerIndex stays INDEX_NONE, DistanceToAssignedPlayer stays FLT_MAX
+					// Client: ALWAYS consider enemies for skeletal mesh based on local player distance.
+					// We use a special value (0) to indicate "use local player" regardless of actual slot.
+					// This fixes the bug where enemies without slot assignments would never get skeletal mesh.
+					AssignedPlayerIndex = 0;  // Always use local player for distance calculation
 				}
 				else
 				{
@@ -651,6 +697,10 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 						}
 					}
 				}
+				else
+				{
+					DebugNoAssignedPlayer++;
+				}
 
 				// Fallback to camera distance for culling purposes
 				const FVector LocationDiff = EnemyLocation - CachedCameraLocation;
@@ -660,8 +710,14 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				// Cull beyond max distance (from any player's perspective)
 				if (DistanceSq > MaxRenderDistanceSq)
 				{
+					DebugCulledByDistance++;
 					if (VisFragment.RenderMode != EEnemyRenderMode::Hidden)
 					{
+						if (bEnableDisappearanceLogging)
+						{
+							UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] Entity NetworkID=%d CULLED by distance: %.0f > %.0f (MaxDist), Pos=%s"),
+								Network.NetworkID, FMath::Sqrt(DistanceSq), VATMaxDistance, *EnemyLocation.ToString());
+						}
 						if (VisFragment.SkeletalMeshPoolIndex >= 0)
 						{
 							ReleaseSkeletalMesh(VisFragment.SkeletalMeshPoolIndex);
@@ -681,6 +737,21 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				VisFragment.CachedDistanceToCamera = DistanceToCamera;
 				VisFragment.PoolLockTimer = FMath::Max(0.0f, VisFragment.PoolLockTimer - DeltaTime);
 				VisFragment.AnimationTime += DeltaTime * VisFragment.AnimationPlayRate;
+
+				// Debug: Track entities that are hidden but within render distance
+				if (VisFragment.RenderMode == EEnemyRenderMode::Hidden)
+				{
+					DebugHiddenCount++;
+					if (bEnableDisappearanceLogging)
+					{
+						UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] Entity NetworkID=%d is HIDDEN but within range! Dist=%.0f, SkelIdx=%d, ISMIdx=%d, Pos=%s"),
+							Network.NetworkID, DistanceToCamera, VisFragment.SkeletalMeshPoolIndex, VisFragment.ISMInstanceIndex, *EnemyLocation.ToString());
+						UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG]   -> TargetPlayerIndex=%d, bHasReceivedFirstUpdate=%d, DistToAssignedPlayer=%.0f, bHasAssignedPlayer=%d"),
+							Network.TargetPlayerIndex, Network.bHasReceivedFirstUpdate ? 1 : 0, DistanceToAssignedPlayer, bHasAssignedPlayer ? 1 : 0);
+						UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG]   -> Movement.bHasAssignedSlot=%d, Movement.AssignedSlotPlayerIndex=%d, State.bIsAlive=%d"),
+							Movement.bHasAssignedSlot ? 1 : 0, Movement.AssignedSlotPlayerIndex, State.bIsAlive ? 1 : 0);
+					}
+				}
 
 				// Collect for sorting
 				FSkeletalMeshCandidate Entry;
@@ -793,6 +864,7 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		// Ready to transition - try to acquire skeletal mesh
 		if (FreeSkeletalMeshIndices.Num() > 0)
 		{
+			EEnemyRenderMode OldMode = Vis.RenderMode;
 			int32 PoolIndex = AcquireSkeletalMesh(CachedAllEntities[i].Entity, *CachedAllEntities[i].Transform);
 			if (PoolIndex >= 0)
 			{
@@ -807,6 +879,12 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 				Vis.RenderMode = EEnemyRenderMode::SkeletalMesh;
 				Vis.bIsVisible = true;
 				Vis.bPendingSkeletalMeshTransition = false;
+
+				if (bEnableDisappearanceLogging && OldMode == EEnemyRenderMode::Hidden)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] Entity BECAME VISIBLE (SkelMesh): Dist=%.0f, Pos=%s"),
+						CachedAllEntities[i].Distance, *CachedAllEntities[i].Transform->GetLocation().ToString());
+				}
 			}
 			// If acquisition failed, keep ISM visible (don't flicker to nothing)
 		}
@@ -865,18 +943,44 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		}
 
 		// Acquire or switch ISM instance
+		EEnemyRenderMode OldMode = Vis.RenderMode;
 		if (Vis.ISMInstanceIndex < 0)
 		{
 			Vis.ISMInstanceIndex = AcquireVATInstance(Transform, Vis, bIsWalking);
 			Vis.bISMIsWalking = bIsWalking;
+
+			if (Vis.ISMInstanceIndex >= 0)
+			{
+				if (bEnableDisappearanceLogging && OldMode == EEnemyRenderMode::Hidden)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] Entity BECAME VISIBLE (ISM): Dist=%.0f, Pos=%s, Walking=%d"),
+						CachedAllEntities[i].Distance, *Transform.GetLocation().ToString(), bIsWalking);
+				}
+			}
+			else
+			{
+				// ISM acquisition failed - this is a problem!
+				UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] FAILED to acquire ISM for entity! Dist=%.0f, Pos=%s, OldMode=%d"),
+					CachedAllEntities[i].Distance, *Transform.GetLocation().ToString(), (int32)OldMode);
+			}
 		}
 		else if (Vis.bISMIsWalking != bIsWalking)
 		{
 			SwitchISMAnimationState(Vis, Transform, bIsWalking);
 		}
 
-		Vis.RenderMode = EEnemyRenderMode::ISM_VAT;
-		Vis.bIsVisible = true;
+		// Only set visible if we have a valid ISM index
+		if (Vis.ISMInstanceIndex >= 0)
+		{
+			Vis.RenderMode = EEnemyRenderMode::ISM_VAT;
+			Vis.bIsVisible = true;
+		}
+		else
+		{
+			// No ISM acquired - entity will remain hidden
+			Vis.RenderMode = EEnemyRenderMode::Hidden;
+			Vis.bIsVisible = false;
+		}
 
 		// Update animation cycle progress for sync point detection
 		UpdateAnimationCycleProgress(Vis, DeltaTime);
@@ -897,9 +1001,36 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		}
 	}
 
-	static int32 DebugCounter = 0;
-	if (++DebugCounter % 60 == 0)
+	// Per-instance debug counters (NOT static - avoids server/client state mixing)
+	static TMap<const UEnemyVisualizationProcessor*, int32> DebugCounterMap;
+	static TMap<const UEnemyVisualizationProcessor*, int32> LastTotalAliveMap;
+	static TMap<const UEnemyVisualizationProcessor*, int32> LastHiddenCountMap;
+	static TMap<const UEnemyVisualizationProcessor*, int32> LastSkeletalInUseMap;
+
+	int32& DebugCounter = DebugCounterMap.FindOrAdd(this, 0);
+	int32& LastTotalAlive = LastTotalAliveMap.FindOrAdd(this, -1);
+	int32& LastHiddenCount = LastHiddenCountMap.FindOrAdd(this, -1);
+	int32& LastSkeletalInUse = LastSkeletalInUseMap.FindOrAdd(this, -1);
+
+	const int32 CurrentSkeletalInUse = SkeletalMeshPoolSize - FreeSkeletalMeshIndices.Num();
+	const bool bStateChanged = (TotalAlive != LastTotalAlive) ||
+							   (DebugHiddenCount != LastHiddenCount) ||
+							   (CurrentSkeletalInUse != LastSkeletalInUse);
+
+	// Log immediately if state changed, or every 2 seconds for status
+	if (bStateChanged || (++DebugCounter % 120 == 0))
 	{
+		if (bStateChanged && bEnableDisappearanceLogging)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! STATE CHANGE DETECTED !!!!!"));
+			UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] TotalAlive: %d->%d, HiddenInRange: %d->%d, SkeletalInUse: %d->%d"),
+				LastTotalAlive, TotalAlive, LastHiddenCount, DebugHiddenCount, LastSkeletalInUse, CurrentSkeletalInUse);
+		}
+
+		LastTotalAlive = TotalAlive;
+		LastHiddenCount = DebugHiddenCount;
+		LastSkeletalInUse = CurrentSkeletalInUse;
+
 		UE_LOG(LogTemp, Warning, TEXT("=== ISM EXECUTE DEBUG ==="));
 		UE_LOG(LogTemp, Warning, TEXT("Total Alive: %d, CachedEntities: %d"), TotalAlive, CachedAllEntities.Num());
 		UE_LOG(LogTemp, Warning, TEXT("NumShouldHaveSkeletal: %d"), NumShouldHaveSkeletal);
@@ -919,6 +1050,17 @@ void UEnemyVisualizationProcessor::Execute(FMassEntityManager& EntityManager, FM
 		}
 
 		UE_LOG(LogTemp, Warning, TEXT("Camera Location: %s"), *CachedCameraLocation.ToString());
+
+		// Disappearance debug summary
+		if (bEnableDisappearanceLogging)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] === DISAPPEARANCE DEBUG ==="));
+			UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] HiddenButInRange: %d, CulledByDistance: %d, NoAssignedPlayer: %d"),
+				DebugHiddenCount, DebugCulledByDistance, DebugNoAssignedPlayer);
+			UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] FreeSkeletalMeshIndices: %d/%d, FreeISM_Idle: %d, FreeISM_Walk: %d"),
+				FreeSkeletalMeshIndices.Num(), SkeletalMeshPoolSize, FreeVATInstanceIndices.Num(), FreeVATInstanceIndices_Walk.Num());
+			UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] IsClient: %s"), bIsClient ? TEXT("YES") : TEXT("NO"));
+		}
 	}
 
 	// ========== PASS 4: Batch update ISM instances ==========
@@ -1177,8 +1319,11 @@ int32 UEnemyVisualizationProcessor::AcquireSkeletalMesh(FMassEntityHandle Entity
 
 void UEnemyVisualizationProcessor::ReleaseSkeletalMesh(int32 PoolIndex)
 {
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseSkeletalMesh called - PoolIndex: %d"), PoolIndex);
+
 	if (!SkeletalMeshPool.IsValidIndex(PoolIndex))
 	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseSkeletalMesh FAILED - Invalid pool index"));
 		return;
 	}
 
@@ -1186,13 +1331,25 @@ void UEnemyVisualizationProcessor::ReleaseSkeletalMesh(int32 PoolIndex)
 
 	if (AActor* Actor = Entry.Actor.Get())
 	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseSkeletalMesh - Hiding actor at %s"), *Actor->GetActorLocation().ToString());
+
+		// Force immediate visibility update
 		Actor->SetActorHiddenInGame(true);
 		Actor->SetActorLocation(FVector(0, 0, -10000));
+
+		// Force the actor to update its render state immediately
+		Actor->MarkComponentsRenderStateDirty();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseSkeletalMesh - Actor is NULL"));
 	}
 
 	if (USkeletalMeshComponent* SkelMesh = Entry.SkeletalMeshComponent.Get())
 	{
 		SkelMesh->SetComponentTickEnabled(false);
+		SkelMesh->SetVisibility(false, true);  // Force visibility off with propagation
+		SkelMesh->MarkRenderStateDirty();
 	}
 
 	if (UEnemyAnimInstance* AnimInst = Entry.AnimInstance.Get())
@@ -1210,6 +1367,7 @@ void UEnemyVisualizationProcessor::ReleaseSkeletalMesh(int32 PoolIndex)
 	Entry.bInUse = false;
 
 	FreeSkeletalMeshIndices.Add(PoolIndex);
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseSkeletalMesh - Done, FreeIndices: %d"), FreeSkeletalMeshIndices.Num());
 }
 
 void UEnemyVisualizationProcessor::UpdateSkeletalMesh(
@@ -1396,20 +1554,38 @@ int32 UEnemyVisualizationProcessor::AcquireVATInstance(const FTransform& Transfo
 
 void UEnemyVisualizationProcessor::ReleaseVATInstance(int32 InstanceIndex, bool bIsWalking)
 {
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseVATInstance called - Index: %d, bIsWalking: %s"),
+		InstanceIndex, bIsWalking ? TEXT("true") : TEXT("false"));
+
 	// Select the appropriate ISM component based on walking state
 	UInstancedStaticMeshComponent* TargetISM = bIsWalking ? VATISM_Walk : VATISM;
 	TArray<int32>&							   FreeIndices = bIsWalking ? FreeVATInstanceIndices_Walk : FreeVATInstanceIndices;
 
 	if (InstanceIndex < 0 || !TargetISM || !TargetISM->IsValidLowLevel())
 	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseVATInstance FAILED - Index: %d, TargetISM valid: %s"),
+			InstanceIndex, (TargetISM && TargetISM->IsValidLowLevel()) ? TEXT("true") : TEXT("false"));
 		return;
 	}
+
+	// Get current transform for logging
+	FTransform CurrentTransform;
+	TargetISM->GetInstanceTransform(InstanceIndex, CurrentTransform, true);
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseVATInstance - Current location: %s"), *CurrentTransform.GetLocation().ToString());
 
 	FreeIndices.Add(InstanceIndex);
 
 	FTransform HiddenTransform;
 	HiddenTransform.SetLocation(FVector(0, 0, -100000.0f));
-	TargetISM->UpdateInstanceTransform(InstanceIndex, HiddenTransform, false, false, false);
+	bool bUpdated = TargetISM->UpdateInstanceTransform(InstanceIndex, HiddenTransform, true, true, true);
+
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ReleaseVATInstance - Moved to hidden location, UpdateResult: %s, TotalInstances: %d, FreeIndices: %d"),
+		bUpdated ? TEXT("true") : TEXT("false"),
+		TargetISM->GetInstanceCount(),
+		FreeIndices.Num());
+
+	// Force render update
+	TargetISM->MarkRenderStateDirty();
 }
 
 void UEnemyVisualizationProcessor::SwitchISMAnimationState(FEnemyVisualizationFragment& VisFragment, const FTransform& Transform, bool bNewIsWalking)
@@ -1541,6 +1717,34 @@ const FVATAnimationData* UEnemyVisualizationProcessor::GetVATAnimationData(EEnem
 
 void UEnemyVisualizationProcessor::BeginDestroy()
 {
+	// DEBUG: Log call stack to understand why processor is being destroyed
+	UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! EnemyVisualizationProcessor::BeginDestroy CALLED !!!!!"));
+	UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] This will cause ALL enemies to disappear!"));
+
+	// Print some context about what's happening
+	UWorld* World = GetWorld();
+	if (World)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] World: %s, NetMode: %d, bIsTearingDown: %d"),
+			*World->GetName(), (int32)World->GetNetMode(), World->bIsTearingDown ? 1 : 0);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] World is NULL!"));
+	}
+
+	// Remove from world instances map
+	for (auto It = WorldInstances.CreateIterator(); It; ++It)
+	{
+		if (It->Value == this)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] Unregistered from world (Remaining worlds: %d)"),
+				WorldInstances.Num() - 1);
+			It.RemoveCurrent();
+			break;
+		}
+	}
+
 	// Cleanup skeletal mesh pool actors
 	for (FSkeletalMeshPoolEntry& Entry : SkeletalMeshPool)
 	{
@@ -1597,6 +1801,105 @@ void UEnemyVisualizationProcessor::GetVisualizationStats(int32& OutSkeletalMeshC
 	{
 		OutVATInstanceCount = 0;
 	}
+}
+
+UEnemyVisualizationProcessor* UEnemyVisualizationProcessor::GetInstanceForWorld(UWorld* World)
+{
+	if (!World)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] GetInstanceForWorld: World is NULL"));
+		return nullptr;
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] GetInstanceForWorld: Looking for world %s (ptr: %p), Total registered: %d"),
+		*World->GetName(), World, WorldInstances.Num());
+
+	// Debug: list all registered worlds
+	for (auto& Pair : WorldInstances)
+	{
+		UWorld* RegisteredWorld = Pair.Key.Get();
+		UE_LOG(LogTemp, Error, TEXT("[Visualization]   - Registered: %s (ptr: %p, valid: %s)"),
+			RegisteredWorld ? *RegisteredWorld->GetName() : TEXT("NULL"),
+			RegisteredWorld,
+			Pair.Key.IsValid() ? TEXT("true") : TEXT("false"));
+	}
+
+	UEnemyVisualizationProcessor** Found = WorldInstances.Find(World);
+	if (Found && *Found)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Visualization] GetInstanceForWorld: Found processor for world %s"), *World->GetName());
+		return *Found;
+	}
+
+	// Try to find by name as fallback (in case pointer comparison fails)
+	FString WorldName = World->GetName();
+	for (auto& Pair : WorldInstances)
+	{
+		UWorld* RegisteredWorld = Pair.Key.Get();
+		if (RegisteredWorld && RegisteredWorld->GetName() == WorldName)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Visualization] GetInstanceForWorld: Found processor by NAME match for %s"), *WorldName);
+			return Pair.Value;
+		}
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] GetInstanceForWorld: No processor found for world %s"),
+		*World->GetName());
+	return nullptr;
+}
+
+void UEnemyVisualizationProcessor::CleanupEntityVisualization(const FMassEntityHandle& EntityHandle, FMassEntityManager& EntityManager)
+{
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ===== CleanupEntityVisualization CALLED ====="));
+
+	if (!EntityManager.IsEntityValid(EntityHandle))
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] CleanupEntityVisualization: Invalid entity handle"));
+		return;
+	}
+
+	FEnemyVisualizationFragment* VisFragment = EntityManager.GetFragmentDataPtr<FEnemyVisualizationFragment>(EntityHandle);
+	if (!VisFragment)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] CleanupEntityVisualization: No visualization fragment"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] CleanupEntityVisualization: SkeletalMeshPoolIndex: %d, ISMInstanceIndex: %d, bISMIsWalking: %s, RenderMode: %d"),
+		VisFragment->SkeletalMeshPoolIndex,
+		VisFragment->ISMInstanceIndex,
+		VisFragment->bISMIsWalking ? TEXT("true") : TEXT("false"),
+		(int32)VisFragment->RenderMode);
+
+	// Release skeletal mesh if assigned
+	if (VisFragment->SkeletalMeshPoolIndex >= 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] Calling ReleaseSkeletalMesh(%d)"), VisFragment->SkeletalMeshPoolIndex);
+		ReleaseSkeletalMesh(VisFragment->SkeletalMeshPoolIndex);
+		VisFragment->SkeletalMeshPoolIndex = INDEX_NONE;
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] No skeletal mesh to release (index: %d)"), VisFragment->SkeletalMeshPoolIndex);
+	}
+
+	// Release ISM instance if assigned
+	if (VisFragment->ISMInstanceIndex >= 0)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] Calling ReleaseVATInstance(%d, %s)"),
+			VisFragment->ISMInstanceIndex, VisFragment->bISMIsWalking ? TEXT("walking") : TEXT("idle"));
+		ReleaseVATInstance(VisFragment->ISMInstanceIndex, VisFragment->bISMIsWalking);
+		VisFragment->ISMInstanceIndex = INDEX_NONE;
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("[Visualization] No ISM instance to release (index: %d)"), VisFragment->ISMInstanceIndex);
+	}
+
+	VisFragment->RenderMode = EEnemyRenderMode::Hidden;
+	VisFragment->bIsVisible = false;
+
+	UE_LOG(LogTemp, Error, TEXT("[Visualization] ===== CleanupEntityVisualization DONE ====="));
 }
 
 // ============================================================================

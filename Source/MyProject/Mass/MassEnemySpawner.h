@@ -167,6 +167,12 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Mass Spawning")
 	bool IsSpawning() const;
 
+	/**
+	 * Get all spawned entity handles (server-side only)
+	 * Useful for targeting systems that need to iterate through all enemies
+	 */
+	const TArray<FMassEntityHandle>& GetSpawnedEntities() const { return SpawnedEntities; }
+
 private:
 	// ========================================
 	// INTERNAL STATE

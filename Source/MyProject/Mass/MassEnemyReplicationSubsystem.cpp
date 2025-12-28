@@ -9,6 +9,7 @@
 #include "MassEntitySubsystem.h"
 #include "MassCommonFragments.h"
 #include "EnemyFragments.h"
+#include "EnemyVisualizationProcessor.h"
 
 void UMassEnemyReplicationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -168,6 +169,78 @@ void UMassEnemyReplicationSubsystem::QueueBatchForSending(APlayerController* Cli
 	Batches.Add(Batch);
 }
 
+void UMassEnemyReplicationSubsystem::QueueDeathNotification(int32 NetworkID)
+{
+	if (NetworkID == INDEX_NONE)
+	{
+		return;
+	}
+
+	FScopeLock Lock(&DeathNotificationsLock);
+	QueuedDeathNotifications.AddUnique(NetworkID);
+	UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! DEATH QUEUED on SERVER for NetworkID %d !!!!!"), NetworkID);
+}
+
+void UMassEnemyReplicationSubsystem::HandleDeathNotifications(const TArray<int32>& NetworkIDs)
+{
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() != NM_Client)
+	{
+		return;
+	}
+
+	UMassEntitySubsystem* EntitySubsystem = World->GetSubsystem<UMassEntitySubsystem>();
+	if (!EntitySubsystem)
+	{
+		return;
+	}
+
+	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+	UEnemyVisualizationProcessor* VisProcessor = UEnemyVisualizationProcessor::GetInstanceForWorld(World);
+
+	for (int32 NetworkID : NetworkIDs)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! DEATH NOTIFICATION RECEIVED for NetworkID %d !!!!!"), NetworkID);
+
+		FMassEntityHandle* EntityHandlePtr = NetworkIDToEntity.Find(NetworkID);
+		if (!EntityHandlePtr)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] NetworkID %d not found in client entity map"), NetworkID);
+			continue;
+		}
+
+		FMassEntityHandle EntityHandle = *EntityHandlePtr;
+		if (!EntityManager.IsEntityValid(EntityHandle))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Entity for NetworkID %d is invalid"), NetworkID);
+			NetworkIDToEntity.Remove(NetworkID);
+			continue;
+		}
+
+		// Clean up visualization BEFORE destroying entity
+		if (VisProcessor)
+		{
+			VisProcessor->CleanupEntityVisualization(EntityHandle, EntityManager);
+		}
+
+		// Destroy the client entity
+		if (EntityManager.IsProcessing())
+		{
+			EntityManager.Defer().DestroyEntity(EntityHandle);
+		}
+		else
+		{
+			EntityManager.DestroyEntity(EntityHandle);
+		}
+
+		// Remove from tracking maps
+		NetworkIDToEntity.Remove(NetworkID);
+		NetworkIDLastUpdateTime.Remove(NetworkID);
+		UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! CLIENT DESTROYED entity for NetworkID %d, Remaining: %d !!!!!"),
+			NetworkID, NetworkIDToEntity.Num());
+	}
+}
+
 TStatId UMassEnemyReplicationSubsystem::GetStatId() const
 {
 	RETURN_QUICK_DECLARE_CYCLE_STAT(UMassEnemyReplicationSubsystem, STATGROUP_Tickables);
@@ -195,6 +268,35 @@ void UMassEnemyReplicationSubsystem::Tick(float DeltaTime)
 		FScopeLock Lock(&QueuedBatchesLock);
 		BatchesToSend = MoveTemp(QueuedBatchesToSend);
 		QueuedBatchesToSend.Empty();
+	}
+
+	// Get queued death notifications
+	TArray<int32> DeathNotificationsToSend;
+	{
+		FScopeLock Lock(&DeathNotificationsLock);
+		DeathNotificationsToSend = MoveTemp(QueuedDeathNotifications);
+		QueuedDeathNotifications.Empty();
+	}
+
+	// Send death notifications to ALL clients
+	if (DeathNotificationsToSend.Num() > 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Server sending %d death notifications"), DeathNotificationsToSend.Num());
+
+		TArray<APlayerController*> AllPlayers = GetAllPlayerControllers();
+		for (APlayerController* PC : AllPlayers)
+		{
+			if (!PC || PC->IsLocalController())
+			{
+				continue;  // Skip local player on listen server
+			}
+
+			AMyProjectPlayerController* MyPC = Cast<AMyProjectPlayerController>(PC);
+			if (MyPC)
+			{
+				MyPC->ClientReceiveDeathNotifications(DeathNotificationsToSend);
+			}
+		}
 	}
 
 	if (BatchesToSend.Num() > 0)
@@ -240,8 +342,16 @@ void UMassEnemyReplicationSubsystem::Tick(float DeltaTime)
 
 void UMassEnemyReplicationSubsystem::ProcessClientReception(float DeltaTime)
 {
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const float CurrentTime = World->GetTimeSeconds();
+
 	// Get local player controller
-	APlayerController* LocalPC = GetWorld()->GetFirstPlayerController();
+	APlayerController* LocalPC = World->GetFirstPlayerController();
 	if (!LocalPC)
 	{
 		return;
@@ -249,44 +359,109 @@ void UMassEnemyReplicationSubsystem::ProcessClientReception(float DeltaTime)
 
 	// Try to get batch data
 	FMassEntityBatchUpdate BatchData;
-	if (!GetAndClearBatchForClient(LocalPC, BatchData))
+	bool bReceivedData = GetAndClearBatchForClient(LocalPC, BatchData);
+
+	if (bReceivedData)
 	{
-		return;  // No data this frame
-	}
+		UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION] Client Reception: Processing %d entities"), BatchData.Entities.Num());
 
-	UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION] Client Reception: Processing %d entities"), BatchData.Entities.Num());
-
-	// Get entity manager
-	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
-	if (!EntitySubsystem)
-	{
-		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Client Reception: No EntitySubsystem!"));
-		return;
-	}
-
-	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-
-	// Process each entity in the batch
-	for (const FCompressedEnemyState& State : BatchData.Entities)
-	{
-		if (FMassEntityHandle* ExistingEntity = NetworkIDToEntity.Find(State.NetworkID))
+		// Get entity manager
+		UMassEntitySubsystem* EntitySubsystem = World->GetSubsystem<UMassEntitySubsystem>();
+		if (!EntitySubsystem)
 		{
-			// Update existing entity
-			if (EntityManager.IsEntityValid(*ExistingEntity))
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Client Reception: No EntitySubsystem!"));
+			return;
+		}
+
+		FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+		// Process each entity in the batch
+		for (const FCompressedEnemyState& State : BatchData.Entities)
+		{
+			// Track update time for staleness detection
+			NetworkIDLastUpdateTime.Add(State.NetworkID, CurrentTime);
+
+			if (FMassEntityHandle* ExistingEntity = NetworkIDToEntity.Find(State.NetworkID))
 			{
-				UpdateClientEntity(*ExistingEntity, State);
+				// Update existing entity
+				if (EntityManager.IsEntityValid(*ExistingEntity))
+				{
+					UpdateClientEntity(*ExistingEntity, State);
+				}
+				else
+				{
+					// Entity is invalid, remove from map and create new one
+					NetworkIDToEntity.Remove(State.NetworkID);
+					CreateClientEntity(State);
+				}
 			}
 			else
 			{
-				// Entity is invalid, remove from map and create new one
-				NetworkIDToEntity.Remove(State.NetworkID);
+				// Create new entity
 				CreateClientEntity(State);
 			}
 		}
+	}
+
+	// Periodic debug summary - only log on state changes or every 5 seconds
+	static int32 LastTrackedCount = -1;
+	static int32 LastStaleCount = -1;
+
+	DebugLogTimer += DeltaTime;
+
+	// Count stale entities (no update in last 2 seconds)
+	int32 StaleCount = 0;
+	int32 ActiveCount = 0;
+	const float StaleThreshold = 2.0f;
+
+	for (const auto& Pair : NetworkIDLastUpdateTime)
+	{
+		float TimeSinceUpdate = CurrentTime - Pair.Value;
+		if (TimeSinceUpdate > StaleThreshold)
+		{
+			StaleCount++;
+		}
 		else
 		{
-			// Create new entity
-			CreateClientEntity(State);
+			ActiveCount++;
+		}
+	}
+
+	const bool bClientStateChanged = (NetworkIDToEntity.Num() != LastTrackedCount) || (StaleCount != LastStaleCount);
+
+	if (bClientStateChanged || DebugLogTimer >= 5.0f)
+	{
+		if (bClientStateChanged)
+		{
+			UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! CLIENT STATE CHANGE !!!!!"));
+			UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] Tracked: %d->%d, Stale: %d->%d"),
+				LastTrackedCount, NetworkIDToEntity.Num(), LastStaleCount, StaleCount);
+
+			// Log stale entities on state change
+			for (const auto& Pair : NetworkIDLastUpdateTime)
+			{
+				float TimeSinceUpdate = CurrentTime - Pair.Value;
+				if (TimeSinceUpdate > StaleThreshold)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] STALE ENTITY: NetworkID=%d, TimeSinceUpdate=%.1fs"),
+						Pair.Key, TimeSinceUpdate);
+				}
+			}
+		}
+
+		LastTrackedCount = NetworkIDToEntity.Num();
+		LastStaleCount = StaleCount;
+		DebugLogTimer = 0.0f;
+
+		UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] === CLIENT ENTITY SUMMARY ==="));
+		UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] TotalTracked: %d, Active: %d, Stale(>%.0fs): %d"),
+			NetworkIDToEntity.Num(), ActiveCount, StaleThreshold, StaleCount);
+
+		// Log player position for reference
+		if (LocalPC && LocalPC->GetPawn())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] LocalPlayerPos: %s"),
+				*LocalPC->GetPawn()->GetActorLocation().ToString());
 		}
 	}
 }
@@ -333,8 +508,8 @@ void UMassEnemyReplicationSubsystem::CreateClientEntity(const FCompressedEnemySt
 	// Store mapping
 	NetworkIDToEntity.Add(State.NetworkID, NewEntity);
 
-	UE_LOG(LogTemp, Log, TEXT("[MASS-REPLICATION] Created client entity for NetworkID %d at %s"),
-		State.NetworkID, *State.Position.ToString());
+	UE_LOG(LogTemp, Warning, TEXT("[VIS-DEBUG] CLIENT ENTITY CREATED: NetworkID=%d, Pos=%s, TargetPlayerIdx=%d, TotalClientEntities=%d"),
+		State.NetworkID, *State.Position.ToString(), State.TargetPlayerIndex, NetworkIDToEntity.Num());
 }
 
 void UMassEnemyReplicationSubsystem::UpdateClientEntity(FMassEntityHandle EntityHandle, const FCompressedEnemyState& State)

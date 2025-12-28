@@ -214,7 +214,7 @@ void AMassEnemySpawner::StartSpawning()
 
 	// Spawn one wave with 30 enemies
 	const int32 OriginalEnemiesPerWave = EnemiesPerWave;
-	EnemiesPerWave = 100;
+	EnemiesPerWave = 1;
 	SpawnWave();
 	EnemiesPerWave = OriginalEnemiesPerWave;
 
@@ -368,12 +368,14 @@ FMassEntityHandle AMassEnemySpawner::CreateMassEntity(const FVector& Location)
 	}
 
 	// 2. State Fragment
-	if (FEnemyStateFragment* StateFragment = 
+	if (FEnemyStateFragment* StateFragment =
 		EntityManager.GetFragmentDataPtr<FEnemyStateFragment>(NewEntity))
 	{
 		StateFragment->bIsAlive = true;
 		StateFragment->bIsMoving = false;
 		StateFragment->PreviousLocation = Location;
+		StateFragment->Health = 100.0f;
+		StateFragment->MaxHealth = 100.0f;
 	}
 	else
 	{
