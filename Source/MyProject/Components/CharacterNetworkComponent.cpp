@@ -3,6 +3,7 @@
 #include "CharacterNetworkComponent.h"
 #include "MyProjectCharacter.h"
 #include "Character/CombatComponent.h"
+#include "MyCharacterMovementComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "GameFramework/Character.h"
 
@@ -76,9 +77,20 @@ void UCharacterNetworkComponent::TriggerAttack(float Angle)
 		// Server: directly multicast
 		MulticastStartAttack(Angle);
 	}
-	else
+	else if (IsLocallyControlled())
 	{
-		// Client: request server to multicast
+		// Client-side prediction: apply effects locally FIRST for responsive feel
+		// This prevents the micro-lag when switching to walking speed
+		OwnerCharacter->SmoothlyRotate(Angle, 10);
+
+		// Note: bIgnoreServerCorrections is always true for owning client (set in BeginPlay)
+
+		if (UCombatComponent* CombatComp = OwnerCharacter->GetCombatComponent())
+		{
+			CombatComp->StartAttack();
+		}
+
+		// Then notify server (server will multicast, but we skip re-applying locally)
 		ServerStartAttack(Angle);
 	}
 }
@@ -96,9 +108,18 @@ void UCharacterNetworkComponent::MulticastStartAttack_Implementation(float Angle
 		if (!OwnerCharacter) return;
 	}
 
-	// Apply rotation and start attack
+	// Skip for locally controlled clients - they already applied via prediction in TriggerAttack
+	// This prevents double-applying the attack which would cause animation/state issues
+	if (!HasNetworkAuthority() && IsLocallyControlled())
+	{
+		return;
+	}
+
+	// Apply rotation and start attack for:
+	// - Server (authority)
+	// - Other clients viewing this character (simulated proxies)
 	OwnerCharacter->SmoothlyRotate(Angle, 10);
-	
+
 	if (UCombatComponent* CombatComp = OwnerCharacter->GetCombatComponent())
 	{
 		CombatComp->StartAttack();
@@ -138,6 +159,60 @@ void UCharacterNetworkComponent::ServerSetSecondAttackWindow_Implementation(bool
 			CombatComp->SetIsSecondAttackWindowOpen(bOpen);
 		}
 	}
+}
+
+// ========= ATTACK END RPCs =========
+
+void UCharacterNetworkComponent::TriggerAttackEnd()
+{
+	if (!OwnerCharacter)
+	{
+		CacheOwnerCharacter();
+		if (!OwnerCharacter) return;
+	}
+
+	if (HasNetworkAuthority())
+	{
+		// Server: directly multicast
+		MulticastEndAttack();
+	}
+	else if (IsLocallyControlled())
+	{
+		// Client-side prediction: apply speed change locally FIRST
+		// This prevents the micro-lag when switching back to running speed
+		OwnerCharacter->SwitchToRunning();
+
+		// Note: bIgnoreServerCorrections stays true - client is always autonomous
+		// (set in BeginPlay, never disabled)
+
+		// Then notify server (server will multicast, but we skip re-applying locally)
+		ServerEndAttack();
+	}
+}
+
+void UCharacterNetworkComponent::ServerEndAttack_Implementation()
+{
+	MulticastEndAttack();
+}
+
+void UCharacterNetworkComponent::MulticastEndAttack_Implementation()
+{
+	if (!OwnerCharacter)
+	{
+		CacheOwnerCharacter();
+		if (!OwnerCharacter) return;
+	}
+
+	// Skip for locally controlled clients - they already applied via prediction in TriggerAttackEnd
+	if (!HasNetworkAuthority() && IsLocallyControlled())
+	{
+		return;
+	}
+
+	// Apply speed change for:
+	// - Server (authority)
+	// - Other clients viewing this character (simulated proxies)
+	OwnerCharacter->SwitchToRunning();
 }
 
 // ========= DEBUGGING =========

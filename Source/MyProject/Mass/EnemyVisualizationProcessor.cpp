@@ -1348,8 +1348,6 @@ void UEnemyVisualizationProcessor::ReleaseSkeletalMesh(int32 PoolIndex)
 	if (USkeletalMeshComponent* SkelMesh = Entry.SkeletalMeshComponent.Get())
 	{
 		SkelMesh->SetComponentTickEnabled(false);
-		SkelMesh->SetVisibility(false, true);  // Force visibility off with propagation
-		SkelMesh->MarkRenderStateDirty();
 	}
 
 	if (UEnemyAnimInstance* AnimInst = Entry.AnimInstance.Get())

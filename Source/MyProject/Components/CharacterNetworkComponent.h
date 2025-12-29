@@ -56,9 +56,21 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerSetSecondAttackWindow(bool bOpen);
 
+	/** Server RPC to end attack */
+	UFUNCTION(Server, Reliable)
+	void ServerEndAttack();
+
+	/** Multicast RPC to end attack on all clients */
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastEndAttack();
+
 	/** Helper function to trigger attack (handles authority/client logic) */
 	UFUNCTION(BlueprintCallable, Category = "Network|Combat")
 	void TriggerAttack(float Angle);
+
+	/** Helper function to end attack with prediction (handles authority/client logic) */
+	UFUNCTION(BlueprintCallable, Category = "Network|Combat")
+	void TriggerAttackEnd();
 
 	/** Helper function to set second attack window (handles authority check) */
 	UFUNCTION(BlueprintCallable, Category = "Network|Combat")

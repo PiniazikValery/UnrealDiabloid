@@ -17,6 +17,14 @@ public:
     /** Is character currently dodging? */
     UPROPERTY(Replicated, BlueprintReadOnly, Category = "Dodge")
     bool bIsDodging;
+
+    /**
+     * When true, client ignores server position corrections.
+     * Used during attacks to prevent teleporting on bad connections.
+     * Only affects the owning client - server remains authoritative.
+     */
+    UPROPERTY(BlueprintReadWrite, Category = "Network")
+    bool bIgnoreServerCorrections = false;
     
     /** Direction of dodge (normalized) - replicated for client-server sync */
     UPROPERTY(Replicated, BlueprintReadOnly, Category = "Dodge")
@@ -87,6 +95,12 @@ public:
     virtual void PhysCustom(float deltaTime, int32 Iterations) override;
     virtual void UpdateCharacterStateBeforeMovement(float DeltaSeconds) override;
     virtual void UpdateCharacterStateAfterMovement(float DeltaSeconds) override;
+
+    /** Override to skip corrections when bIgnoreServerCorrections is true */
+    virtual void SmoothCorrection(const FVector& OldLocation, const FQuat& OldRotation, const FVector& NewLocation, const FQuat& NewRotation) override;
+
+    /** Override to completely block server position corrections */
+    virtual void ClientAdjustPosition_Implementation(float TimeStamp, FVector NewLoc, FVector NewVel, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode, TOptional<FRotator> OptionalRotation = TOptional<FRotator>()) override;
 
     /** Handle replication of dodge-related properties */
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;

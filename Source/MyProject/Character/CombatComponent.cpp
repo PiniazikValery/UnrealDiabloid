@@ -13,6 +13,7 @@
 #include "Engine/DamageEvents.h"
 #include "Engine/OverlapResult.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/CharacterNetworkComponent.h"
 
 UCombatComponent::UCombatComponent()
 {
@@ -1080,14 +1081,28 @@ void UCombatComponent::FinishAttack(UAnimMontage* Montage, bool bInterrupted)
 	SetCombatState(ECombatState::Idle);
 	if (OwnerCharacter.IsValid() && !bInterrupted)
 	{
-		OwnerCharacter->SwitchToRunning();
+		// Use network component for predicted speed change to avoid stutter
+		// Only trigger from server or locally controlled client
+		if (OwnerCharacter->HasAuthority() || OwnerCharacter->IsLocallyControlled())
+		{
+			if (UCharacterNetworkComponent* NetComp = OwnerCharacter->NetworkComponent)
+			{
+				NetComp->TriggerAttackEnd();
+			}
+			else
+			{
+				// Fallback if no network component
+				OwnerCharacter->SwitchToRunning();
+			}
+		}
+		// Other clients will receive the multicast from TriggerAttackEnd
 	}
 }
 
 void UCombatComponent::OnAttackAnimationComplete(FName AnimationName)
 {
 	UE_LOG(LogTemp, Log, TEXT("CombatComponent: Attack animation complete: %s"), *AnimationName.ToString());
-	
+
 	// Handle attack completion
 	if (AnimationName == TEXT("FirstAttack") || AnimationName == TEXT("SecondAttack"))
 	{
@@ -1095,7 +1110,21 @@ void UCombatComponent::OnAttackAnimationComplete(FName AnimationName)
 		SetCombatState(ECombatState::Idle);
 		if (OwnerCharacter.IsValid())
 		{
-			OwnerCharacter->SwitchToRunning();
+			// Use network component for predicted speed change to avoid stutter
+			// Only trigger from server or locally controlled client
+			if (OwnerCharacter->HasAuthority() || OwnerCharacter->IsLocallyControlled())
+			{
+				if (UCharacterNetworkComponent* NetComp = OwnerCharacter->NetworkComponent)
+				{
+					NetComp->TriggerAttackEnd();
+				}
+				else
+				{
+					// Fallback if no network component
+					OwnerCharacter->SwitchToRunning();
+				}
+			}
+			// Other clients will receive the multicast from TriggerAttackEnd
 		}
 	}
 }

@@ -498,6 +498,32 @@ void UMyCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterations
 
 // Removed ServerSetDodgeDirection RPC functions - network prediction handles dodge direction through saved moves
 
+void UMyCharacterMovementComponent::SmoothCorrection(const FVector& OldLocation, const FQuat& OldRotation, const FVector& NewLocation, const FQuat& NewRotation)
+{
+	// When bIgnoreServerCorrections is true, skip applying server corrections entirely
+	// This allows the client to remain smooth during attacks even with bad connections
+	if (bIgnoreServerCorrections)
+	{
+		return;
+	}
+
+	// Otherwise, apply normal correction
+	Super::SmoothCorrection(OldLocation, OldRotation, NewLocation, NewRotation);
+}
+
+void UMyCharacterMovementComponent::ClientAdjustPosition_Implementation(float TimeStamp, FVector NewLoc, FVector NewVel, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode, TOptional<FRotator> OptionalRotation)
+{
+	// When bIgnoreServerCorrections is true, completely ignore server position corrections
+	// The client is fully autonomous - server cannot adjust our position
+	if (bIgnoreServerCorrections)
+	{
+		return;
+	}
+
+	// Otherwise, apply normal server correction
+	Super::ClientAdjustPosition_Implementation(TimeStamp, NewLoc, NewVel, NewBase, NewBaseBoneName, bHasBase, bBaseRelativePosition, ServerMovementMode, OptionalRotation);
+}
+
 void UMyCharacterMovementComponent::ServerStartDodge_Implementation(const FVector& Direction)
 {
     if(!DodgeObject)

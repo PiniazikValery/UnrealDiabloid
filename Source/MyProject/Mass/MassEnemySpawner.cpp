@@ -214,7 +214,7 @@ void AMassEnemySpawner::StartSpawning()
 
 	// Spawn one wave with 30 enemies
 	const int32 OriginalEnemiesPerWave = EnemiesPerWave;
-	EnemiesPerWave = 1;
+	EnemiesPerWave = 20;
 	SpawnWave();
 	EnemiesPerWave = OriginalEnemiesPerWave;
 

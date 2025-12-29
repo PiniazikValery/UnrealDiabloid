@@ -11,6 +11,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "MyCharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/Controller.h"
 #include "EnhancedInputComponent.h"
@@ -445,14 +446,69 @@ void AMyProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 
 void AMyProjectCharacter::Tick(float DeltaTime)
 {
-	// No smoothing logic here; handled inside RotationSmoothingComponent.
+	Super::Tick(DeltaTime);
+
+	// Smooth speed interpolation to prevent network teleporting
+	UpdateSpeedInterpolation(DeltaTime);
+}
+
+void AMyProjectCharacter::UpdateSpeedInterpolation(float DeltaTime)
+{
+	if (TargetMaxWalkSpeed <= 0.f)
+	{
+		return; // Not initialized yet
+	}
+
+	// Owning client applies speed changes instantly in SwitchToWalking/Running
+	// No interpolation needed - this gives zero lag on the client
+	if (IsLocallyControlled() && !HasAuthority())
+	{
+		return;
+	}
+
+	// Server and other clients: interpolate for smooth visuals
+	UCharacterMovementComponent* MoveComp = GetCharacterMovement();
+	if (!MoveComp)
+	{
+		return;
+	}
+
+	const float CurrentSpeed = MoveComp->MaxWalkSpeed;
+	if (!FMath::IsNearlyEqual(CurrentSpeed, TargetMaxWalkSpeed, 1.f))
+	{
+		// Smoothly interpolate to target speed
+		const float NewSpeed = FMath::FInterpTo(CurrentSpeed, TargetMaxWalkSpeed, DeltaTime, SpeedInterpRate);
+		MoveComp->MaxWalkSpeed = NewSpeed;
+	}
 }
 
 void AMyProjectCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	
-	UE_LOG(LogTemp, Warning, TEXT("[%s] BeginPlay called: HasAuthority=%s, IsLocallyControlled=%s, Controller=%s"), 
+
+	// Initialize target speed to current running speed (default state)
+	if (CharacterConfig)
+	{
+		TargetMaxWalkSpeed = CharacterConfig->RunSpeed;
+	}
+	else
+	{
+		TargetMaxWalkSpeed = GetCharacterMovement()->MaxWalkSpeed;
+	}
+
+	// EXPERIMENT: Always ignore server corrections on owning client
+	// This makes the client fully autonomous - zero lag, zero teleporting
+	// Trade-off: Client can desync from server (fine for PvE, risky for PvP)
+	if (IsLocallyControlled() && !HasAuthority())
+	{
+		if (UMyCharacterMovementComponent* MyMoveComp = Cast<UMyCharacterMovementComponent>(GetCharacterMovement()))
+		{
+			MyMoveComp->bIgnoreServerCorrections = true;
+			UE_LOG(LogTemp, Warning, TEXT("[CLIENT] Server corrections disabled - client is autonomous"));
+		}
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[%s] BeginPlay called: HasAuthority=%s, IsLocallyControlled=%s, Controller=%s"),
 		HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"),
 		HasAuthority() ? TEXT("true") : TEXT("false"),
 		IsLocallyControlled() ? TEXT("true") : TEXT("false"),
@@ -831,27 +887,29 @@ void AMyProjectCharacter::OnDodge()
 
 void AMyProjectCharacter::SwitchToWalking()
 {
-	if (CharacterConfig)
+	const float NewSpeed = CharacterConfig ? CharacterConfig->WalkSpeed : 200.f;
+	TargetMaxWalkSpeed = NewSpeed;
+
+	// Owning client: Apply instantly for zero lag
+	// Server/other clients: Will interpolate in Tick
+	if (IsLocallyControlled() && !HasAuthority())
 	{
-		GetCharacterMovement()->MaxWalkSpeed = CharacterConfig->WalkSpeed;
-	}
-	else
-	{
-		GetCharacterMovement()->MaxWalkSpeed = 200.f; // Fallback
+		GetCharacterMovement()->MaxWalkSpeed = NewSpeed;
 	}
 }
 
 void AMyProjectCharacter::SwitchToRunning()
 {
 	SmoothlyRotate(0, 10);
-	
-	if (CharacterConfig)
+
+	const float NewSpeed = CharacterConfig ? CharacterConfig->RunSpeed : 500.f;
+	TargetMaxWalkSpeed = NewSpeed;
+
+	// Owning client: Apply instantly for zero lag
+	// Server/other clients: Will interpolate in Tick
+	if (IsLocallyControlled() && !HasAuthority())
 	{
-		GetCharacterMovement()->MaxWalkSpeed = CharacterConfig->RunSpeed;
-	}
-	else
-	{
-		GetCharacterMovement()->MaxWalkSpeed = 500.f; // Fallback
+		GetCharacterMovement()->MaxWalkSpeed = NewSpeed;
 	}
 }
 

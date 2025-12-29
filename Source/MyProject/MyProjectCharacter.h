@@ -207,9 +207,16 @@ private:
 	UInputComponent*	_PlayerInputComponent = nullptr;
 	FTimerHandle		InputSetupRetryTimer;
 	int32				InputSetupRetryCount = 0;
+
+	// Smooth speed interpolation to prevent network teleporting
+	// Both client and server interpolate to target, reducing position errors
+	float TargetMaxWalkSpeed = 0.f;
+	static constexpr float SpeedInterpRate = 15.f; // How fast to interpolate (higher = faster)
+
 	void InitializeMesh();
 	void InitializeInput();
 	void RetryInputSetup();
+	void UpdateSpeedInterpolation(float DeltaTime);
 	UFUNCTION()
 	void HandleGesture(EGestureType Gesture);
 	UFUNCTION()
