@@ -133,11 +133,8 @@ protected:
 	 * Update existing client-side entity from network data
 	 */
 	void UpdateClientEntity(FMassEntityHandle EntityHandle, const FCompressedEnemyState& State);
-	// Next NetworkID to assign (incrementing counter)
+	// Next NetworkID to assign (incrementing counter, never reused)
 	int32 NextNetworkID = 1;
-
-	// Set of released NetworkIDs available for reuse
-	TSet<int32> ReleasedNetworkIDs;
 
 	// Relevancy radius in units (5000 = 50 meters)
 	float RelevancyRadius = 5000.0f;
@@ -171,4 +168,8 @@ protected:
 	TMap<int32, float> NetworkIDLastUpdateTime;
 	float DebugLogTimer = 0.0f;
 	float DebugLogInterval = 1.0f;  // Log summary every second
+
+	// Track destroyed NetworkIDs to prevent ghost recreation from stale batches
+	// Safe to keep forever since we never reuse NetworkIDs
+	TSet<int32> DestroyedNetworkIDs;
 };

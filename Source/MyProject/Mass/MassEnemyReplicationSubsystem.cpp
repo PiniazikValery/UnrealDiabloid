@@ -10,6 +10,7 @@
 #include "MassCommonFragments.h"
 #include "EnemyFragments.h"
 #include "EnemyVisualizationProcessor.h"
+#include "UObject/UObjectIterator.h"
 
 void UMassEnemyReplicationSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -23,7 +24,7 @@ void UMassEnemyReplicationSubsystem::Deinitialize()
 	Super::Deinitialize();
 
 	PendingClientBatches.Empty();
-	ReleasedNetworkIDs.Empty();
+	DestroyedNetworkIDs.Empty();
 
 	UE_LOG(LogTemp, Log, TEXT("MassEnemyReplicationSubsystem: Deinitialized"));
 }
@@ -39,29 +40,17 @@ bool UMassEnemyReplicationSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 
 int32 UMassEnemyReplicationSubsystem::AssignNetworkID()
 {
-	// Reuse released IDs if available
-	if (ReleasedNetworkIDs.Num() > 0)
-	{
-		int32 ReusedID = INDEX_NONE;
-		for (int32 ID : ReleasedNetworkIDs)
-		{
-			ReusedID = ID;
-			break;
-		}
-		ReleasedNetworkIDs.Remove(ReusedID);
-		return ReusedID;
-	}
-
-	// Otherwise, assign next sequential ID
+	// Always use incrementing IDs - never reuse
+	// This prevents ghost entity bugs where stale network batches
+	// get confused with new entities using recycled IDs
+	// With 32-bit int, we have 2+ billion IDs - plenty for any session
 	return NextNetworkID++;
 }
 
 void UMassEnemyReplicationSubsystem::ReleaseNetworkID(int32 NetworkID)
 {
-	if (NetworkID != INDEX_NONE)
-	{
-		ReleasedNetworkIDs.Add(NetworkID);
-	}
+	// No-op: We no longer reuse NetworkIDs to prevent ghost entity bugs
+	// Keeping the function for API compatibility
 }
 
 bool UMassEnemyReplicationSubsystem::IsEntityRelevant(const FVector& EntityLocation, TArray<APlayerController*>& OutRelevantPlayers) const
@@ -183,20 +172,44 @@ void UMassEnemyReplicationSubsystem::QueueDeathNotification(int32 NetworkID)
 
 void UMassEnemyReplicationSubsystem::HandleDeathNotifications(const TArray<int32>& NetworkIDs)
 {
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] ===== HandleDeathNotifications ENTERED with %d NetworkIDs ====="), NetworkIDs.Num());
+
 	UWorld* World = GetWorld();
-	if (!World || World->GetNetMode() != NM_Client)
+	if (!World)
 	{
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: World is NULL!"));
 		return;
 	}
 
+	const ENetMode NetMode = World->GetNetMode();
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: World=%s, NetMode=%d (0=Standalone, 1=DedicatedServer, 2=ListenServer, 3=Client)"),
+		*World->GetName(), (int32)NetMode);
+
+	// Only skip on dedicated server - clients AND listen servers need to handle death
+	if (NetMode == NM_DedicatedServer)
+	{
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: Skipping on dedicated server"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: Getting EntitySubsystem..."));
 	UMassEntitySubsystem* EntitySubsystem = World->GetSubsystem<UMassEntitySubsystem>();
 	if (!EntitySubsystem)
 	{
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: No EntitySubsystem!"));
 		return;
 	}
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: EntitySubsystem found, getting EntityManager..."));
 
 	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: EntityManager obtained, checking NetworkIDToEntity map size: %d"), NetworkIDToEntity.Num());
+
+	// Try to get VisProcessor for proper cleanup
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: Getting VisProcessor..."));
 	UEnemyVisualizationProcessor* VisProcessor = UEnemyVisualizationProcessor::GetInstanceForWorld(World);
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: VisProcessor = %s"), VisProcessor ? TEXT("FOUND") : TEXT("NULL"));
+
+	UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] HandleDeathNotifications: Starting to process %d death notifications..."), NetworkIDs.Num());
 
 	for (int32 NetworkID : NetworkIDs)
 	{
@@ -205,7 +218,7 @@ void UMassEnemyReplicationSubsystem::HandleDeathNotifications(const TArray<int32
 		FMassEntityHandle* EntityHandlePtr = NetworkIDToEntity.Find(NetworkID);
 		if (!EntityHandlePtr)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] NetworkID %d not found in client entity map"), NetworkID);
+			UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] NetworkID %d not found in client entity map (map has %d entries)"), NetworkID, NetworkIDToEntity.Num());
 			continue;
 		}
 
@@ -217,26 +230,52 @@ void UMassEnemyReplicationSubsystem::HandleDeathNotifications(const TArray<int32
 			continue;
 		}
 
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Found valid entity for NetworkID %d, cleaning up..."), NetworkID);
+
 		// Clean up visualization BEFORE destroying entity
 		if (VisProcessor)
 		{
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Calling CleanupEntityVisualization..."));
 			VisProcessor->CleanupEntityVisualization(EntityHandle, EntityManager);
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] CleanupEntityVisualization done for NetworkID %d"), NetworkID);
+		}
+		else
+		{
+			// Fallback: Try to manually release visualization resources
+			FEnemyVisualizationFragment* VisFragment = EntityManager.GetFragmentDataPtr<FEnemyVisualizationFragment>(EntityHandle);
+			if (VisFragment)
+			{
+				UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Manual cleanup for NetworkID %d - ISMIdx: %d, SkelIdx: %d"),
+					NetworkID, VisFragment->ISMInstanceIndex, VisFragment->SkeletalMeshPoolIndex);
+				// Mark as hidden so the processor won't render it
+				VisFragment->RenderMode = EEnemyRenderMode::Hidden;
+				VisFragment->bIsVisible = false;
+			}
 		}
 
 		// Destroy the client entity
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] About to destroy entity for NetworkID %d, IsProcessing=%s"),
+			NetworkID, EntityManager.IsProcessing() ? TEXT("TRUE") : TEXT("FALSE"));
+
 		if (EntityManager.IsProcessing())
 		{
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Using DEFERRED destruction for NetworkID %d"), NetworkID);
 			EntityManager.Defer().DestroyEntity(EntityHandle);
 		}
 		else
 		{
+			UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Using IMMEDIATE destruction for NetworkID %d"), NetworkID);
 			EntityManager.DestroyEntity(EntityHandle);
 		}
 
-		// Remove from tracking maps
+		UE_LOG(LogTemp, Error, TEXT("[MASS-REPLICATION] Entity destruction called for NetworkID %d"), NetworkID);
+
+		// Remove from tracking maps and mark as destroyed
 		NetworkIDToEntity.Remove(NetworkID);
 		NetworkIDLastUpdateTime.Remove(NetworkID);
-		UE_LOG(LogTemp, Error, TEXT("[VIS-DEBUG] !!!!! CLIENT DESTROYED entity for NetworkID %d, Remaining: %d !!!!!"),
+		DestroyedNetworkIDs.Add(NetworkID);
+
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Client destroyed entity for NetworkID %d, remaining tracked: %d"),
 			NetworkID, NetworkIDToEntity.Num());
 	}
 }
@@ -284,19 +323,36 @@ void UMassEnemyReplicationSubsystem::Tick(float DeltaTime)
 		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Server sending %d death notifications"), DeathNotificationsToSend.Num());
 
 		TArray<APlayerController*> AllPlayers = GetAllPlayerControllers();
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Found %d player controllers"), AllPlayers.Num());
+
+		int32 SentCount = 0;
 		for (APlayerController* PC : AllPlayers)
 		{
-			if (!PC || PC->IsLocalController())
+			if (!PC)
 			{
+				UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Skipping NULL player controller"));
+				continue;
+			}
+
+			if (PC->IsLocalController())
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Skipping local controller: %s"), *PC->GetName());
 				continue;  // Skip local player on listen server
 			}
 
 			AMyProjectPlayerController* MyPC = Cast<AMyProjectPlayerController>(PC);
 			if (MyPC)
 			{
+				UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Sending death notifications to client: %s"), *MyPC->GetName());
 				MyPC->ClientReceiveDeathNotifications(DeathNotificationsToSend);
+				SentCount++;
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Cast to MyProjectPlayerController failed for: %s"), *PC->GetName());
 			}
 		}
+		UE_LOG(LogTemp, Warning, TEXT("[MASS-REPLICATION] Sent death notifications to %d clients"), SentCount);
 	}
 
 	if (BatchesToSend.Num() > 0)
@@ -468,6 +524,12 @@ void UMassEnemyReplicationSubsystem::ProcessClientReception(float DeltaTime)
 
 void UMassEnemyReplicationSubsystem::CreateClientEntity(const FCompressedEnemyState& State)
 {
+	// Don't recreate entities that were destroyed - prevents ghost entities from stale batches
+	if (DestroyedNetworkIDs.Contains(State.NetworkID))
+	{
+		return;
+	}
+
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
 	if (!EntitySubsystem)
 	{
